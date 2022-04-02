@@ -24,6 +24,7 @@
 
 # Editor related
 /.vscode/
+*.code-workspace
 
 # Protobuf generated code
 /src/proto/*.pb.h
