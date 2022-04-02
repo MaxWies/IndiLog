@@ -179,3 +179,5 @@ $(SRC_PATH)/proto/%.pb.cpp $(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.proto
 	$(CMD_PREFIX)$(PROTOC) --proto_path=$(SRC_PATH)/proto --cpp_out=$(SRC_PATH)/proto $<
 	@mv $(patsubst %.proto,%.pb.cc,$<) $(patsubst %.proto,%.pb.cpp,$<)
 $(SRC_PATH)/proto/%.pb.h: $(SRC_PATH)/proto/%.pb.cpp
+
+proto: $(PROTO_HEADERS)
