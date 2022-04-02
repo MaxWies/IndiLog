@@ -1,0 +1,10 @@
+FROM ubuntu:focal as builder
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Germany/Berlin
+RUN apt update && \
+    apt upgrade -y && \
+    apt install -y g++ clang make cmake pkg-config autoconf automake libtool curl unzip
+
+WORKDIR /boki
+COPY . .
+RUN CC=clang CXX=clang++ ./build_deps.sh

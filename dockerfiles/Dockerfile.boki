@@ -1,0 +1,17 @@
+FROM maxwie/deps:latest as builder
+
+WORKDIR /boki
+RUN rm -rf ./src
+COPY ./src ./src
+RUN CXX=clang++ make -j $(nproc)
+
+FROM ubuntu:focal as release
+
+COPY --from=builder /boki/bin/release/launcher   /boki/launcher
+COPY --from=builder /boki/bin/release/gateway    /boki/gateway
+COPY --from=builder /boki/bin/release/engine     /boki/engine
+COPY --from=builder /boki/bin/release/sequencer  /boki/sequencer
+COPY --from=builder /boki/bin/release/storage    /boki/storage
+COPY --from=builder /boki/bin/release/controller /boki/controller
+
+WORKDIR /boki
