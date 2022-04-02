@@ -31,7 +31,7 @@ void StorageBase::StartInternal() {
     SetupDB();
     SetupZKWatchers();
     SetupTimers();
-    log_cache_.emplace(absl::GetFlag(FLAGS_slog_storage_cache_cap_mb));
+    log_cache_.emplace(absl::GetFlag(FLAGS_slog_storage_cache_cap_mb), false /* taint hits */);
     background_thread_.Start();
 }
 

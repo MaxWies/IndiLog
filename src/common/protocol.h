@@ -121,6 +121,8 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
+constexpr uint64_t kEngineCacheHitTag = std::numeric_limits<uint64_t>::max()-1;
+
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
@@ -313,6 +315,32 @@ public:
 
     static bool IsSharedLogOp(const Message& message) {
         return static_cast<MessageType>(message.message_type) == MessageType::SHARED_LOG_OP;
+    }
+
+    static std::string GetMessageTypeMeaning(const Message& message) {
+        switch (static_cast<MessageType>(message.message_type))
+        {
+        case MessageType::LAUNCHER_HANDSHAKE:
+            return "LAUNCHER_HANDSHAKE";
+        case MessageType::FUNC_WORKER_HANDSHAKE:
+            return "FUNC_WORKER_HANDSHAKE";
+        case MessageType::HANDSHAKE_RESPONSE:
+            return "HANDSHAKE_RESPONSE";
+        case MessageType::CREATE_FUNC_WORKER:
+            return "CREATE_FUNC_WORKER";
+        case MessageType::INVOKE_FUNC:
+            return "INVOKE_FUNC";
+        case MessageType::DISPATCH_FUNC_CALL:
+            return "DISPATCH_FUNC_CALL";
+        case MessageType::FUNC_CALL_COMPLETE:
+            return "FUNC_CALL_COMPLETE";
+        case MessageType::FUNC_CALL_FAILED:
+            return "FUNC_CALL_FAILED";
+        case MessageType::SHARED_LOG_OP:
+            return "SHARED_LOG_OP";
+        default:
+            return "UNKNOWN-MESSAGE-TYPE";
+        }
     }
 
     static void SetFuncCall(Message* message, const FuncCall& func_call) {

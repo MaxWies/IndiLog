@@ -37,7 +37,7 @@ void EngineBase::Start() {
     SetupTimers();
     // Setup cache
     if (absl::GetFlag(FLAGS_slog_engine_enable_cache)) {
-        log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb));
+        log_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_cache_cap_mb), absl::GetFlag(FLAGS_slog_engine_cache_taint_hit));
     }
 }
 

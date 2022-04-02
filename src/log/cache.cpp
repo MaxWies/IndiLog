@@ -7,10 +7,14 @@ __END_THIRD_PARTY_HEADERS
 namespace faas {
 namespace log {
 
-LRUCache::LRUCache(int mem_cap_mb) {
+LRUCache::LRUCache(int mem_cap_mb, bool taint_hits) {
     int64_t cap_mem_size = -1;
     if (mem_cap_mb > 0) {
         cap_mem_size = int64_t{mem_cap_mb} << 20;
+    }
+    taint_hits_ = taint_hits;
+    if (taint_hits_){
+        LOG(INFO) << "Tainting cache hits activated";
     }
     dbm_.reset(new tkrzw::CacheDBM(/* cap_rec_num= */ -1, cap_mem_size));
 }
@@ -40,7 +44,7 @@ static inline std::string EncodeLogEntry(const LogMetaData& log_metadata,
     return encoded;
 }
 
-static inline void DecodeLogEntry(std::string encoded, LogEntry* log_entry) {
+static inline void DecodeLogEntry(std::string encoded, bool taint_hit, LogEntry* log_entry) {
     DCHECK_GT(encoded.size(), sizeof(LogMetaData));
     LogMetaData& metadata = log_entry->metadata;
     memcpy(&metadata,
@@ -55,7 +59,12 @@ static inline void DecodeLogEntry(std::string encoded, LogEntry* log_entry) {
             reinterpret_cast<const uint64_t*>(encoded.data() + metadata.data_size),
             metadata.num_tags);
         log_entry->user_tags.assign(user_tags.begin(), user_tags.end());
-    } else {
+    } 
+    if (taint_hit){
+        log_entry->user_tags.push_back(protocol::kEngineCacheHitTag);
+        DCHECK_EQ(metadata.num_tags+1, log_entry->user_tags.size());
+    }
+    if (metadata.num_tags <= 0 && !taint_hit) {
         log_entry->user_tags.clear();
     }
     encoded.resize(metadata.data_size);
@@ -76,7 +85,7 @@ std::optional<LogEntry> LRUCache::Get(uint64_t seqnum) {
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()) {
         LogEntry log_entry;
-        DecodeLogEntry(std::move(data), &log_entry);
+        DecodeLogEntry(std::move(data), taint_hits_, &log_entry);
         DCHECK_EQ(seqnum, log_entry.metadata.seqnum);
         return log_entry;
     } else {
