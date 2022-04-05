@@ -1,6 +1,7 @@
 #include "launcher/func_process.h"
 
 #include "common/time.h"
+#include "common/protocol.h"
 #include "utils/fs.h"
 #include "ipc/base.h"
 #include "launcher/launcher.h"
@@ -62,8 +63,10 @@ bool FuncProcess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool)
     if (!launcher_->fprocess_working_dir().empty()) {
         subprocess_.SetWorkingDir(launcher_->fprocess_working_dir());
     }
+    subprocess_.LogEnvVariables();
     if (!subprocess_.Start(uv_loop, read_buffer_pool,
                            absl::bind_front(&FuncProcess::OnSubprocessExit, this))) {
+        LOG(WARNING) << "Subprocess failed to start";
         return false;
     }
     message_pipe_ = subprocess_.GetPipe(message_pipe_fd_);
@@ -84,6 +87,7 @@ bool FuncProcess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool)
     UV_DCHECK_OK(uv_write(write_req, UV_AS_STREAM(message_pipe_),
                           bufs, 2, &FuncProcess::SendMessageCallback));
     state_ = kRunning;
+    LOG(INFO) << "Function process runs";
     return true;
 }
 

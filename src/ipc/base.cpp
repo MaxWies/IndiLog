@@ -35,6 +35,7 @@ void SetRootPathForIpc(std::string_view path, bool create) {
         CHECK(fs_utils::IsDirectory(root_path_for_ipc)) << root_path_for_ipc << " does not exist";
         CHECK(fs_utils::IsDirectory(root_path_for_shm)) << root_path_for_shm << " does not exist";
         CHECK(fs_utils::IsDirectory(root_path_for_fifo)) << root_path_for_fifo << " does not exist";
+        LOG(INFO) << "IPC, SHM, FIFO directories exist";
     }
 }
 

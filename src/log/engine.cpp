@@ -39,9 +39,11 @@ void Engine::OnViewCreated(const View* view) {
                 if (!view->is_active_phylog(sequencer_id)) {
                     continue;
                 }
+                HLOG_F(INFO, "Install LogProducer for sequencer {}", sequencer_id);
                 producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(
                     my_node_id(), view, sequencer_id));
                 if (engine_node->HasIndexFor(sequencer_id)) {
+                    HLOG_F(INFO, "Install LogIndex for sequencer {}", sequencer_id);
                     index_collection_.InstallLogSpace(std::make_unique<Index>(
                         view, sequencer_id));
                 }

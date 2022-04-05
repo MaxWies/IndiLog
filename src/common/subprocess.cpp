@@ -61,6 +61,13 @@ void Subprocess::AddEnvVariable(std::string_view name, int value) {
     env_variables_.push_back(fmt::format("{}={}", name, value));
 }
 
+void Subprocess::LogEnvVariables() {
+    DCHECK(state_ == kCreated);
+    for (const std::string& keyValue : env_variables_){
+        LOG(INFO) << "EnvVariable: " << keyValue;
+    }
+}
+
 bool Subprocess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool,
                        ExitCallback exit_callback) {
     read_buffer_pool_ = read_buffer_pool;
@@ -128,6 +135,7 @@ bool Subprocess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool,
             PCHECK(close(std_fds_[i]) == 0);
         }
     }
+    HLOG(INFO) << "Subprocess (PID: " << std::to_string(pid_) << ") is running";
     state_ = kRunning;
     return true;
 }

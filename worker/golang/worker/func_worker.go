@@ -8,11 +8,11 @@ import (
 	"log"
 	"net"
 	"os"
-	"time"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	common "cs.utexas.edu/zjia/faas/common"
 	config "cs.utexas.edu/zjia/faas/config"
@@ -115,12 +115,14 @@ func (w *FuncWorker) Run() {
 func (w *FuncWorker) doHandshake() error {
 	c, err := net.Dial("unix", ipc.GetEngineUnixSocketPath())
 	if err != nil {
+		log.Fatalf("[FATAL] Handshake: Unix socket not found at path %s", ipc.GetEngineUnixSocketPath())
 		return err
 	}
 	w.engineConn = c
 
 	ip, err := ipc.FifoOpenForRead(ipc.GetFuncWorkerInputFifoName(w.clientId), true)
 	if err != nil {
+		log.Fatalf("[FATAL] Handshake: Failed to open fifo %s for client %d", ipc.GetFuncWorkerInputFifoName(w.clientId), w.clientId)
 		return err
 	}
 	w.inputPipe = ip
@@ -128,6 +130,7 @@ func (w *FuncWorker) doHandshake() error {
 	message := protocol.NewFuncWorkerHandshakeMessage(w.funcId, w.clientId)
 	_, err = w.engineConn.Write(message)
 	if err != nil {
+		log.Fatal("[FATAL] Handshake: Failed to write message to socket")
 		return err
 	}
 	response := protocol.NewEmptyMessage()
@@ -175,6 +178,7 @@ func (w *FuncWorker) doHandshake() error {
 	return nil
 }
 
+// listens to function calls and executes them
 func (w *FuncWorker) servingLoop() {
 	for {
 		message := <-w.newFuncCallChan

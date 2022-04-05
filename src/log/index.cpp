@@ -279,6 +279,7 @@ void Index::OnFinalized(uint32_t metalog_position) {
 
 void Index::AdvanceIndexProgress() {
     while (!cuts_.empty()) {
+        // cut: (metalog seqnum, end seqnum)
         uint32_t end_seqnum = cuts_.front().second;
         if (data_received_seqnum_position_ < end_seqnum) {
             break;
@@ -286,11 +287,14 @@ void Index::AdvanceIndexProgress() {
         HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));
         auto iter = received_data_.begin();
         while (iter != received_data_.end()) {
+            // iter: (seqnum, IndexData)
             uint32_t seqnum = iter->first;
             if (seqnum >= end_seqnum) {
+                // outstanding received_data_ is for next cut(s) 
                 break;
             }
             const IndexData& index_data = iter->second;
+            // this adds an key-value pair to find the engine by sequence number
             GetOrCreateIndex(index_data.user_logspace)->Add(
                 seqnum, index_data.engine_id, index_data.user_tags);
             iter = received_data_.erase(iter);
@@ -319,6 +323,7 @@ void Index::AdvanceIndexProgress() {
     auto iter = pending_queries_.begin();
     while (iter != pending_queries_.end()) {
         if (iter->first > indexed_metalog_position_) {
+            // processing a query with higher metalog position is not allowed
             break;
         }
         const IndexQuery& query = iter->second;

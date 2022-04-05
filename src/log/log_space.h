@@ -30,6 +30,7 @@ private:
                                   /* storage_id */ uint16_t>,
                         uint32_t> shard_progrsses_;
 
+    // stores for each sequencer the current metalog position
     absl::flat_hash_map</* sequencer_id */ uint16_t,
                         uint32_t> metalog_progresses_;
     uint32_t replicated_metalog_position_;

@@ -51,8 +51,8 @@ void MetaLogPrimary::UpdateStorageProgress(uint16_t storage_id,
                 HVLOG_F(1, "Store progress from storage {} for engine {}: {}",
                         storage_id, engine_id, bits::HexStr0x(current_position));
                 dirty_shards_.insert(engine_id);
-            }
-        }
+            } 
+        } 
     }
 }
 
@@ -87,6 +87,7 @@ std::optional<MetaLogProto> MetaLogPrimary::MarkNextCut() {
         new_logs_proto->add_shard_starts(last_cut_.at(engine_id));
         uint32_t delta = 0;
         if (dirty_shards_.contains(engine_id)) {
+            // compute the delta for the shard of the engine and overwrite the last cut for this engine
             uint32_t current_position = GetShardReplicatedPosition(engine_id);
             DCHECK_GT(current_position, last_cut_.at(engine_id));
             delta = current_position - last_cut_.at(engine_id);

@@ -40,6 +40,7 @@ public:
     void SetWorkingDir(std::string_view path);
     void AddEnvVariable(std::string_view name, std::string_view value);
     void AddEnvVariable(std::string_view name, int value);
+    void LogEnvVariables();
 
     using ExitCallback =
         std::function<void(long /* exit_status */,

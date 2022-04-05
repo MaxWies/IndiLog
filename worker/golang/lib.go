@@ -44,7 +44,7 @@ func Serve(factory types.FuncHandlerFactory) {
 	}
 	err = config.InitFuncConfig(payload)
 	if err != nil {
-		log.Fatal("[FATAL] InitFuncConfig failed: %s", err)
+		log.Fatalf("[FATAL] InitFuncConfig failed: %s", err)
 	}
 	w, err := worker.NewFuncWorker(uint16(funcId), uint16(clientId), factory)
 	if err != nil {
@@ -57,6 +57,7 @@ func Serve(factory types.FuncHandlerFactory) {
 
 	maxProcFactor, err := strconv.Atoi(os.Getenv("FAAS_GO_MAX_PROC_FACTOR"))
 	if err != nil {
+		// we need 9 workers to increase the maximum number of OS threads by one
 		maxProcFactor = 8
 	}
 
@@ -76,6 +77,7 @@ func Serve(factory types.FuncHandlerFactory) {
 			planedMaxProcs := (numWorkers-1)/maxProcFactor + 1
 			currentMaxProcs := runtime.GOMAXPROCS(0)
 			if planedMaxProcs > currentMaxProcs {
+				// Go's runtime allows dynamically setting the maximum number of OS threads for running goroutines
 				runtime.GOMAXPROCS(planedMaxProcs)
 				log.Printf("[INFO] Current GOMAXPROCS is %d", planedMaxProcs)
 			}
