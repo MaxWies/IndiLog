@@ -130,8 +130,27 @@ void Controller::ReconfigView(const Configuration& configuration) {
     for (size_t i = 0; i < num_engines * userlog_replicas_; i++) {
         view_proto.add_storage_plan(configuration.storage_nodes.at(i % num_storages));
     }
+
+
+    NodeIdVec index_engines = NodeIdVec(index_nodes_.begin(), index_nodes_.end());
+
+    // index nodes have higher priority
+    for (size_t i = 0; i < num_engines; i++) {
+        uint16_t n = configuration.engine_nodes.at(i % num_engines);
+        if(std::find(index_engines.begin(), index_engines.end(), n) == index_engines.end()) {
+            index_engines.push_back(n);
+            HLOG_F(INFO, "Engine node {} is not prioritized for being an index replica", n);
+        } else {
+            HLOG_F(INFO, "Engine node {} is prioritized for being an index replica", n);
+        }
+    }
+
+    DCHECK_EQ(num_engines, index_engines.size());
+
     for (size_t i = 0; i < num_sequencers * index_replicas_; i++) {
-        view_proto.add_index_plan(configuration.engine_nodes.at(i % num_engines));
+        uint32_t engine = index_engines.at(i % num_engines);
+        HLOG_F(INFO, "Engine node {} is an index replica", engine);
+        view_proto.add_index_plan(engine);
     }
 
     InstallNewView(view_proto);
@@ -216,6 +235,9 @@ void Controller::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id)
     case NodeWatcher::kStorageNode:
         storage_nodes_.insert(node_id);
         break;
+    case NodeWatcher::kIndexNode:
+        index_nodes_.insert(node_id);
+        break;
     default:
         break;
     }
@@ -231,6 +253,9 @@ void Controller::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_id
         break;
     case NodeWatcher::kStorageNode:
         storage_nodes_.erase(node_id);
+        break;
+    case NodeWatcher::kIndexNode:
+        index_nodes_.erase(node_id);
         break;
     default:
         break;
@@ -264,6 +289,7 @@ void Controller::StartCommandHandler() {
 
     NodeIdVec sequencer_nodes(sequencer_nodes_.begin(), sequencer_nodes_.end());
     NodeIdVec engine_nodes(engine_nodes_.begin(), engine_nodes_.end());
+    NodeIdVec index_nodes(index_nodes_.begin(), index_nodes_.end());
     NodeIdVec storage_nodes(storage_nodes_.begin(), storage_nodes_.end());
 
     log_space_hash_seed_ = hash::xxHash64(rnd_gen_());
@@ -275,14 +301,15 @@ void Controller::StartCommandHandler() {
                  log_space_hash_tokens_.end(),
                  rnd_gen_);
 
-    HLOG_F(INFO, "Create initial view with {} sequencers, {} engines, and {} storages",
-           sequencer_nodes.size(), engine_nodes.size(), storage_nodes.size());
+    HLOG_F(INFO, "Create initial view with {} sequencers, {} engines ({} proritized), and {} storages",
+           sequencer_nodes.size(), engine_nodes.size(), index_nodes.size(), storage_nodes.size());
     Configuration configuration = {
         .log_space_hash_seed   = log_space_hash_seed_,
         .log_space_hash_tokens = log_space_hash_tokens_,
         .num_phylogs     = num_phylogs_,
         .sequencer_nodes = std::move(sequencer_nodes),
         .engine_nodes    = std::move(engine_nodes),
+        .index_nodes     = std::move(index_nodes),
         .storage_nodes   = std::move(storage_nodes),
     };
     ReconfigView(configuration);

@@ -22,7 +22,7 @@ namespace engine {
 
 class Engine final : public server::ServerBase {
 public:
-    explicit Engine(uint16_t node_id);
+    explicit Engine(std::string node_type, uint16_t node_id);
     ~Engine();
 
     void set_func_config_file(std::string_view path) {

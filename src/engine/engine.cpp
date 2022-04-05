@@ -31,8 +31,8 @@ using server::IngressConnection;
 using server::EgressHub;
 using server::NodeWatcher;
 
-Engine::Engine(uint16_t node_id)
-    : ServerBase(fmt::format("engine_{}", node_id)),
+Engine::Engine(std::string node_type, uint16_t node_id)
+    : ServerBase(fmt::format("{}_{}", node_type, node_id)),
       engine_tcp_port_(-1),
       enable_shared_log_(false),
       node_id_(node_id),

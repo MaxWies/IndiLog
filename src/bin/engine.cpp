@@ -16,6 +16,7 @@ ABSL_FLAG(std::string, root_path_for_ipc, "/dev/shm/faas_ipc",
           "Root directory for IPCs used by FaaS");
 ABSL_FLAG(std::string, func_config_file, "", "Path to function config file");
 ABSL_FLAG(bool, enable_shared_log, false, "If to enable shared log.");
+ABSL_FLAG(std::string, engine_node_type, "engine", "Engine type. Supported: engine, index_engine");
 
 namespace faas {
 
@@ -54,7 +55,7 @@ void EngineMain(int argc, char* argv[]) {
     if (node_id == -1) {
         node_id = GenerateNodeId();
     }
-    auto engine = std::make_unique<engine::Engine>(node_id);
+    auto engine = std::make_unique<engine::Engine>(absl::GetFlag(FLAGS_engine_node_type), node_id);
     engine->set_engine_tcp_port(absl::GetFlag(FLAGS_engine_tcp_port));
     engine->set_func_config_file(absl::GetFlag(FLAGS_func_config_file));
 

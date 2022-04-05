@@ -60,7 +60,8 @@ void NodeManager::FuncCallFinished(const protocol::FuncCall& func_call, uint16_t
 }
 
 void NodeManager::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    if (node_type != NodeWatcher::kEngineNode) {
+    // hack
+    if (node_type != NodeWatcher::kEngineNode || 1000 <= node_id) {
         return;
     }
     std::unique_ptr<Node> node = std::make_unique<Node>(node_id);
@@ -78,7 +79,8 @@ void NodeManager::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id
 }
 
 void NodeManager::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    if (node_type != NodeWatcher::kEngineNode) {
+    // hack
+    if (node_type != NodeWatcher::kEngineNode || 1000 <= node_id) {
         return;
     }
     {
