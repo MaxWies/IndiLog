@@ -21,7 +21,8 @@ public:
         kEngineNode    = 1,
         kSequencerNode = 2,
         kStorageNode   = 3,
-        kTotalNodeType = 4
+        kIndexNode     = 4,
+        kTotalNodeType = 5
     };
 
     using NodeEventCallback = std::function<void(NodeType /* node_type */, uint16_t node_id)>;
@@ -38,7 +39,8 @@ private:
         "GatewayNode",
         "EngineNode",
         "SequencerNode",
-        "StorageNode"
+        "StorageNode",
+        "IndexNode"
     };
 
     std::optional<zk_utils::DirWatcher> watcher_;

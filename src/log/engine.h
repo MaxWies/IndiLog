@@ -69,9 +69,11 @@ private:
     }
 
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
+    protocol::SharedLogMessage BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t master_node_id);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
     IndexQuery BuildIndexQuery(LocalOp* op);
+    IndexQuery BuildIndexTierQuery(LocalOp* op, uint16_t master_node_id);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
 

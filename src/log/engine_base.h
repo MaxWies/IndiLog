@@ -95,6 +95,7 @@ protected:
 
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
+    bool SendIndexTierReadRequest(uint16_t index_node_id, protocol::SharedLogMessage* request);
     bool SendStorageReadRequest(const IndexQueryResult& result,
                                 const View::Engine* engine_node);
     void SendReadResponse(const IndexQuery& query,

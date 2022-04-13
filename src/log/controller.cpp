@@ -17,6 +17,7 @@ Controller::Controller(uint32_t random_seed)
       metalog_replicas_(kDefaultNumReplicas),
       userlog_replicas_(kDefaultNumReplicas),
       index_replicas_(kDefaultNumReplicas),
+      index_shards_(kDefaultNumShards),
       state_(kCreated),
       zk_session_(absl::GetFlag(FLAGS_zookeeper_host),
                   absl::GetFlag(FLAGS_zookeeper_root_path)) {
@@ -80,12 +81,17 @@ void Controller::ReconfigView(const Configuration& configuration) {
         HLOG(ERROR) << "Sequencer nodes not enough";
         return;
     }
+    // TODO: will be removed
     if (configuration.engine_nodes.size() < index_replicas_) {
         HLOG(ERROR) << "Engine nodes not enough";
         return;
     }
     if (configuration.storage_nodes.size() < userlog_replicas_) {
         HLOG(ERROR) << "Storage nodes not enough";
+        return;
+    }
+    if (configuration.index_nodes.size() < index_replicas_ * index_shards_) {
+        HLOG(ERROR) << "Index nodes not enough";
         return;
     }
 
@@ -107,6 +113,7 @@ void Controller::ReconfigView(const Configuration& configuration) {
     view_proto.set_metalog_replicas(gsl::narrow_cast<uint32_t>(metalog_replicas_));
     view_proto.set_userlog_replicas(gsl::narrow_cast<uint32_t>(userlog_replicas_));
     view_proto.set_index_replicas(gsl::narrow_cast<uint32_t>(index_replicas_));
+    view_proto.set_num_index_shards(gsl::narrow_cast<uint32_t>(index_shards_));
     view_proto.set_num_phylogs(gsl::narrow_cast<uint32_t>(configuration.num_phylogs));
     for (uint16_t node_id : configuration.sequencer_nodes) {
         view_proto.add_sequencer_nodes(node_id);
@@ -117,6 +124,9 @@ void Controller::ReconfigView(const Configuration& configuration) {
     for (uint16_t node_id : configuration.storage_nodes) {
         view_proto.add_storage_nodes(node_id);
     }
+    for (uint16_t node_id : configuration.index_nodes) {
+        view_proto.add_index_nodes(node_id);
+    }
 
     view_proto.set_log_space_hash_seed(configuration.log_space_hash_seed);
     for (uint32_t token : configuration.log_space_hash_tokens) {
@@ -126,12 +136,20 @@ void Controller::ReconfigView(const Configuration& configuration) {
     size_t num_sequencers = configuration.sequencer_nodes.size();
     size_t num_engines = configuration.engine_nodes.size();
     size_t num_storages = configuration.storage_nodes.size();
+    size_t num_indexes = configuration.index_nodes.size();
 
     for (size_t i = 0; i < num_engines * userlog_replicas_; i++) {
         view_proto.add_storage_plan(configuration.storage_nodes.at(i % num_storages));
     }
+    // TODO: will be removed
     for (size_t i = 0; i < num_sequencers * index_replicas_; i++) {
         view_proto.add_index_plan(configuration.engine_nodes.at(i % num_engines));
+    }
+    // Index tier plan
+    for (size_t i = 0; i < index_shards_; i++) {
+        for (size_t j = 0; j < index_replicas_; j++) {
+            view_proto.add_index_tier_plan(configuration.index_nodes.at(((i * index_replicas_) + j) % num_indexes));
+        } 
     }
 
     InstallNewView(view_proto);
@@ -216,6 +234,9 @@ void Controller::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id)
     case NodeWatcher::kStorageNode:
         storage_nodes_.insert(node_id);
         break;
+    case NodeWatcher::kIndexNode:
+        index_nodes_.insert(node_id);
+        break;
     default:
         break;
     }
@@ -231,6 +252,9 @@ void Controller::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_id
         break;
     case NodeWatcher::kStorageNode:
         storage_nodes_.erase(node_id);
+        break;
+    case NodeWatcher::kIndexNode:
+        index_nodes_.erase(node_id);
         break;
     default:
         break;
@@ -265,6 +289,7 @@ void Controller::StartCommandHandler() {
     NodeIdVec sequencer_nodes(sequencer_nodes_.begin(), sequencer_nodes_.end());
     NodeIdVec engine_nodes(engine_nodes_.begin(), engine_nodes_.end());
     NodeIdVec storage_nodes(storage_nodes_.begin(), storage_nodes_.end());
+    NodeIdVec index_nodes(index_nodes_.begin(), index_nodes_.end());
 
     log_space_hash_seed_ = hash::xxHash64(rnd_gen_());
     log_space_hash_tokens_.resize(absl::GetFlag(FLAGS_slog_log_space_hash_tokens));
@@ -284,6 +309,7 @@ void Controller::StartCommandHandler() {
         .sequencer_nodes = std::move(sequencer_nodes),
         .engine_nodes    = std::move(engine_nodes),
         .storage_nodes   = std::move(storage_nodes),
+        .index_nodes     = std::move(index_nodes)
     };
     ReconfigView(configuration);
 }
@@ -332,6 +358,11 @@ void Controller::InfoCommandHandler() {
             stream << storage_id << ", ";
         }
         stream << "]\n";
+        stream << "  Indexes = [";
+        for (uint16_t index_id : view->GetIndexNodes()) {
+            stream << index_id << ", ";
+        }
+        stream << "]\n";
     }
 
     LOG(INFO) << "\n[START PRINTING INFO]\n"
@@ -376,6 +407,12 @@ void Controller::ReconfigCommandHandler(std::string inputs) {
         view->GetStorageNodes().end());
     std::shuffle(configuration.storage_nodes.begin(),
                  configuration.storage_nodes.end(),
+                 rnd_gen_);
+    configuration.index_nodes.assign(
+        view->GetIndexNodes().begin(),
+        view->GetIndexNodes().end());
+    std::shuffle(configuration.index_nodes.begin(),
+                 configuration.index_nodes.end(),
                  rnd_gen_);
 
     std::vector<std::string_view> parts = absl::StrSplit(inputs, ' ');

@@ -53,6 +53,9 @@ bool NodeWatcher::ParseNodePath(std::string_view path,
     } else if (absl::StartsWith(path, "storage_")) {
         prefix = "storage_";
         *node_type = kStorageNode;
+    } else if (absl::StartsWith(path, "index_")) {
+        prefix = "index_";
+        *node_type = kIndexNode;
     } else {
         LOG(ERROR) << "Unknown type of node: " << path;
         return false;
@@ -122,6 +125,9 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::STORAGE_TO_ENGINE,      NODE_PAIR(Storage, Engine) },
     { ConnType::SEQUENCER_TO_STORAGE,   NODE_PAIR(Sequencer, Storage) },
     { ConnType::STORAGE_TO_SEQUENCER,   NODE_PAIR(Storage, Sequencer) },
+    { ConnType::ENGINE_TO_INDEX,        NODE_PAIR(Engine, Index) },
+    { ConnType::STORAGE_TO_INDEX,       NODE_PAIR(Storage, Index) },
+    { ConnType::INDEX_TO_STORAGE,       NODE_PAIR(Index, Storage) },
 };
 
 #undef NODE_PAIR

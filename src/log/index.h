@@ -24,6 +24,8 @@ struct IndexQuery {
     uint64_t query_seqnum;
     uint64_t metalog_progress;
 
+    uint16_t master_node_id;
+
     IndexFoundResult prev_found_result;
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);

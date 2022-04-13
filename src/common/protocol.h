@@ -94,10 +94,11 @@ enum class SharedLogOpType : uint16_t {
     READ_NEXT_B = 0x06,  // FuncWorker to Engine, Engine to Index
     READ_AT     = 0x10,  // Index to Storage
     REPLICATE   = 0x11,  // Engine to Storage
-    INDEX_DATA  = 0x12,  // Engine to Index
+    INDEX_DATA  = 0x12,  // Engine to Index, Storage to IndexNode
     SHARD_PROG  = 0x13,  // Storage to Sequencer
     METALOGS    = 0x14,  // Sequencer to Sequencer, Engine, Storage, Index
     META_PROG   = 0x15,  // Sequencer to Sequencer
+    INDEX_RESULT = 0x25, // IndexNode to IndexNode, IndexNode to Engine
     RESPONSE    = 0x20
 };
 
@@ -114,7 +115,8 @@ enum class SharedLogResultType : uint16_t {
     DISCARDED   = 0x31,  // Log to append is discarded
     EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
     DATA_LOST   = 0x33,  // Failed to extract log data
-    TRIM_FAILED = 0x34
+    TRIM_FAILED = 0x34,
+    NO_INDEX    = 0x35,  // No index for log space
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -182,7 +184,12 @@ enum class ConnType : uint16_t {
     ENGINE_TO_STORAGE      = 6,   // Replicate, aux data
     STORAGE_TO_ENGINE      = 7,   // Read result
     SEQUENCER_TO_STORAGE   = 8,   // Meta log
-    STORAGE_TO_SEQUENCER   = 9    // Meta log propagation
+    STORAGE_TO_SEQUENCER   = 9,   // Meta log propagation
+    ENGINE_TO_INDEX        = 10,  // Index request
+    INDEX_TO_ENGINE        = 11,  // Index response
+    STORAGE_TO_INDEX       = 12,  // Index update
+    INDEX_TO_STORAGE       = 13,  // Forward read request
+    INDEX_TO_INDEX         = 14,  // Master slave indexing
 };
 
 struct HandshakeMessage {
@@ -230,7 +237,14 @@ struct SharedLogMessage {
 
     uint16_t origin_node_id;  // [4:6]
     uint16_t hop_times;       // [6:8]
-    uint32_t payload_size;    // [8:12]
+
+    union {
+        uint32_t payload_size;    // [8:12]
+        struct {
+            uint16_t master_node_id; // [8:10] (only used for index tier)
+            uint16_t _2_padding_2_;
+        } __attribute__ ((packed));
+    };
 
     union {
         struct {
@@ -629,6 +643,12 @@ public:
 
     static SharedLogMessage NewDataLostResponse() {
         return NewResponse(SharedLogResultType::DATA_LOST);
+    }
+
+    static SharedLogMessage NewIndexResultResponse() {
+        NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+        message.op_type = static_cast<uint16_t>(SharedLogOpType::INDEX_RESULT);
+        return message;
     }
 
 #undef NEW_EMPTY_SHAREDLOG_MESSAGE

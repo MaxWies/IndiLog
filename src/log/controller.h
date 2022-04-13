@@ -14,6 +14,7 @@ namespace log {
 class Controller {
 public:
     static constexpr size_t kDefaultNumReplicas = 3;
+    static constexpr size_t kDefaultNumShards = 1; // master only
 
     explicit Controller(uint32_t random_seed);
     ~Controller();
@@ -21,6 +22,7 @@ public:
     void set_metalog_replicas(size_t value) { metalog_replicas_ = value; }
     void set_userlog_replicas(size_t value) { userlog_replicas_ = value; }
     void set_index_replicas(size_t value) { index_replicas_ = value; }
+    void set_index_shards(size_t value) { index_shards_ = value; }
     void set_num_phylogs(size_t value) { num_phylogs_ = value; }
 
     void Start();
@@ -35,6 +37,7 @@ private:
     size_t metalog_replicas_;
     size_t userlog_replicas_;
     size_t index_replicas_;
+    size_t index_shards_;
     size_t num_phylogs_;
 
     State state_;
@@ -50,6 +53,7 @@ private:
     std::set</* node_id */ uint16_t> sequencer_nodes_;
     std::set</* node_id */ uint16_t> engine_nodes_;
     std::set</* node_id */ uint16_t> storage_nodes_;
+    std::set</* node_id */ uint16_t> index_nodes_;
 
     std::vector<std::unique_ptr<View>> views_;
 
@@ -62,6 +66,7 @@ private:
         NodeIdVec sequencer_nodes;
         NodeIdVec engine_nodes;
         NodeIdVec storage_nodes;
+        NodeIdVec index_nodes;
     };
     std::optional<Configuration> pending_reconfig_;
 

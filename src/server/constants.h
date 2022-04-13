@@ -14,6 +14,8 @@ constexpr int kSequencerIngressTypeId       = 0x04 << 16;
 constexpr int kSequencerEgressHubTypeId     = 0x05 << 16;
 constexpr int kStorageIngressTypeId         = 0x06 << 16;
 constexpr int kStorageEgressHubTypeId       = 0x07 << 16;
+constexpr int kIndexIngressTypeId           = 0x08 << 16;
+constexpr int kIndexOutgressTypeId          = 0x09 << 16;
 
 // Timers
 constexpr int kTimerTypeId                  = 0x10 << 16;

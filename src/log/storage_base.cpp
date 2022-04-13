@@ -161,6 +161,13 @@ void StorageBase::SendIndexData(const View* view,
         SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
                              engine_id, message, STRING_AS_SPAN(serialized_data));
     }
+    // send index data to shard
+    const View::Storage* storage_node = view->GetStorageNode(my_node_id());
+    const View::NodeIdVec& index_shard_nodes = storage_node->PickIndexShardNodes();
+    for(uint16_t index_id : index_shard_nodes){
+        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
+                            index_id, message, STRING_AS_SPAN(serialized_data));
+    }
 }
 
 bool StorageBase::SendSequencerMessage(uint16_t sequencer_id,
@@ -196,6 +203,7 @@ void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_AT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REPLICATE)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::SET_AUXDATA)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_AT)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
     MessageHandler(message, payload);
@@ -228,6 +236,8 @@ void StorageBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshak
     case protocol::ConnType::ENGINE_TO_STORAGE:
         break;
     case protocol::ConnType::SEQUENCER_TO_STORAGE:
+        break;
+    case protocol::ConnType::INDEX_TO_STORAGE:
         break;
     default:
         HLOG(ERROR) << "Invalid connection type: " << handshake.conn_type;

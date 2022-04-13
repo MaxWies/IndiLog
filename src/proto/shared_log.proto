@@ -10,7 +10,8 @@ message ViewProto {
     uint32 metalog_replicas = 2;
     uint32 userlog_replicas = 3;
     uint32 index_replicas   = 4;
-    uint32 num_phylogs      = 12;
+    uint32 num_index_shards = 5;  // each index shard has $index_replicas
+    uint32 num_phylogs      = 13;
 
     // [Participant Nodes: Sequencer, Engine, and Storage]
     // All nodes have globally unique IDs (even across views)
@@ -21,7 +22,7 @@ message ViewProto {
     // Each log space maps to one sequencer (primary node), which issues a stream of metalog.
     // Each log space has `metalog_replicas` replicas, on other sequencer nodes.
     // One physical log space can be uniquely identified as (view_id, sequencer_id)
-    repeated uint32 sequencer_nodes = 6;
+    repeated uint32 sequencer_nodes = 7;
 
     // [Virtual Log Space]
     // Within each view, user log spaces (i.e. virtual log spaces) are mapped to
@@ -29,8 +30,8 @@ message ViewProto {
     // The mapping is computed via a token-based consistent hashing:
     //   sequencer_id = tokens[H(user_log_space, seed) % len(tokens)]
     // Note that the mapping may change across views.
-    uint64          log_space_hash_seed   = 5;
-    repeated uint32 log_space_hash_tokens = 7;
+    uint64          log_space_hash_seed   = 6;
+    repeated uint32 log_space_hash_tokens = 8;
 
     // [Log Shards]
     // Each physical log space has N shards, where N = len(engine_nodes).
@@ -38,21 +39,24 @@ message ViewProto {
     // This design helps achieving local ordering.
     // Log data of each shard replicates on `userlog_replicas` storage nodes.
     // One log shard can be uniquely identified as (view_id, sequencer_id, engine_id)
-    repeated uint32 engine_nodes = 8;
+    repeated uint32 engine_nodes = 9;
 
     // [Log Index]
     // Each physical log space has `index_replicas` indices, stored on engine nodes.
     // `index_plan` specifies this mapping, which has a length of
     // len(sequencer_nodes) * index_replicas.
-    repeated uint32 index_plan = 9;
+    repeated uint32 index_plan = 10;
 
     // [Log Storage]
     // `storage_plan` specified storage nodes for each log shards, which has a
     // length of len(engine_nodes) * userlog_replicas.
     // Note that for each engine node, its shard of all physical log spaces
     // maps to the same set of storage nodes.
-    repeated uint32 storage_nodes = 10;
-    repeated uint32 storage_plan  = 11;
+    repeated uint32 storage_nodes = 11;
+    repeated uint32 storage_plan  = 12;
+
+    repeated uint32 index_nodes = 14;
+    repeated uint32 index_tier_plan = 15;
 }
 
 message MetaLogProto {
@@ -121,4 +125,11 @@ message IndexDataProto {
     repeated uint32 user_logspaces = 4;
     repeated uint32 user_tag_sizes = 5;
     repeated uint64 user_tags      = 6;
+}
+
+message IndexResultProto {
+    bool found = 1;
+    uint32 view_id = 2;
+    uint32 location_identifier = 3;
+    uint64 seqnum = 4;
 }

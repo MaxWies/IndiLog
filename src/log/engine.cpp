@@ -197,6 +197,31 @@ void Engine::HandleLocalRead(LocalOp* op) {
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
     onging_reads_.PutChecked(op->id, op);
+    if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
+        HVLOG(1) << "Send request to index tier";
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        ONHOLD_IF_SEEN_FUTURE_VIEW(op);
+        const View::Engine* engine_node = current_view_->GetEngineNode(my_node_id());
+        std::vector<uint16_t> index_nodes;
+        engine_node->PickIndexNodePerShard(index_nodes);
+        uint16_t master_index_node = index_nodes.at(0);
+        SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
+        bool send_success = true;
+        std::ostringstream os;
+        for(uint16_t index_node : index_nodes){
+            send_success &= SendIndexTierReadRequest(index_node, &request);
+            os << index_node << ",";
+        }
+        std::string index_nodes_str(os.str());
+        if (!send_success) {
+            HLOG_F(WARNING, "Failed to send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+            onging_reads_.RemoveChecked(op->id);
+            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+            return;
+        }
+        HVLOG_F(1, "Send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+        return;
+    }
     const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
@@ -607,6 +632,12 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     return request;
 }
 
+SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t master_node_id) {
+    SharedLogMessage request = BuildReadRequestMessage(op);
+    request.master_node_id = master_node_id;
+    return request;
+}
+
 SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result) {
     DCHECK(result.state == IndexQueryResult::kContinue);
     IndexQuery query = result.original_query;
@@ -642,6 +673,12 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
             .seqnum = kInvalidLogSeqNum
         }
     };
+}
+
+IndexQuery Engine::BuildIndexTierQuery(LocalOp* op, uint16_t master_node_id) {
+    IndexQuery index_query = BuildIndexQuery(op);
+    index_query.master_node_id = master_node_id;
+    return index_query;
 }
 
 IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
