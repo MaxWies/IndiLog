@@ -42,6 +42,7 @@ void Engine::OnViewCreated(const View* view) {
                 producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(
                     my_node_id(), view, sequencer_id));
                 if (engine_node->HasIndexFor(sequencer_id)) {
+                    HVLOG_F(1, "Create logspace for view={}, sequencer={}", view->id(), sequencer_id);
                     index_collection_.InstallLogSpace(std::make_unique<Index>(
                         view, sequencer_id));
                 }
@@ -197,15 +198,20 @@ void Engine::HandleLocalRead(LocalOp* op) {
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
     onging_reads_.PutChecked(op->id, op);
+    const View::Sequencer* sequencer_node = nullptr;
     if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
         HVLOG(1) << "Send request to index tier";
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_SEEN_FUTURE_VIEW(op);
         const View::Engine* engine_node = current_view_->GetEngineNode(my_node_id());
+        uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
+        sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
         std::vector<uint16_t> index_nodes;
         engine_node->PickIndexNodePerShard(index_nodes);
         uint16_t master_index_node = index_nodes.at(0);
         SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
+        request.sequencer_id = sequencer_node->node_id();
+        request.view_id = sequencer_node->view()->id();
         bool send_success = true;
         std::ostringstream os;
         for(uint16_t index_node : index_nodes){
@@ -219,10 +225,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
             return;
         }
-        HVLOG_F(1, "Send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+        HVLOG_F(1, "Sent request to index tier successully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
         return;
     }
-    const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -634,6 +639,7 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
 
 SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t master_node_id) {
     SharedLogMessage request = BuildReadRequestMessage(op);
+    request.use_master_node_id = protocol::kUseMasterNodeId;
     request.master_node_id = master_node_id;
     return request;
 }

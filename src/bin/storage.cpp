@@ -2,6 +2,7 @@
 #include "base/common.h"
 #include "utils/env_variables.h"
 #include "log/storage.h"
+#include <filesystem>
 
 ABSL_FLAG(int, node_id, -1,
           "My node ID. Also settable through environment variable FAAS_NODE_ID.");
@@ -17,9 +18,18 @@ static void StopServerHandler() {
     }
 }
 
+//TODO: remove later
+void delete_dir_content(const std::filesystem::path& dir_path) {
+    for (auto& path: std::filesystem::directory_iterator(dir_path)) {
+        std::filesystem::remove_all(path);
+    }
+}
+
 void StorageMain(int argc, char* argv[]) {
     base::InitMain(argc, argv);
     base::SetInterruptHandler(StopServerHandler);
+
+    delete_dir_content(absl::GetFlag(FLAGS_db_path));
 
     int node_id = absl::GetFlag(FLAGS_node_id);
     if (node_id == -1) {

@@ -165,8 +165,27 @@ void StorageBase::SendIndexData(const View* view,
     const View::Storage* storage_node = view->GetStorageNode(my_node_id());
     const View::NodeIdVec& index_shard_nodes = storage_node->PickIndexShardNodes();
     for(uint16_t index_id : index_shard_nodes){
+        HVLOG_F(1, "Send index data to index node {}", index_id);
         SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
                             index_id, message, STRING_AS_SPAN(serialized_data));
+    }
+
+    // dirty
+    // send metalog data to shard
+    IndexDataProto index_data_proto_short;
+    index_data_proto_short.set_logspace_id(index_data_proto.logspace_id());
+    index_data_proto_short.set_metalog_position(index_data_proto.metalog_position());
+    index_data_proto_short.set_next_seqnum(index_data_proto.next_seqnum());
+    index_data_proto_short.set_has_index_data(false);
+    std::string serialized_data_short;
+    CHECK(index_data_proto_short.SerializeToString(&serialized_data_short));
+    SharedLogMessage message_short = SharedLogMessageHelper::NewIndexDataMessage(logspace_id);
+    message_short.origin_node_id = node_id_;
+    message_short.payload_size = gsl::narrow_cast<uint32_t>(serialized_data_short.size());
+    for(uint16_t index_id : view->GetIndexNodes()){
+        HVLOG_F(1, "Send metalog data to index node {}", index_id);
+        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
+                            index_id, message_short, STRING_AS_SPAN(serialized_data_short));
     }
 }
 
@@ -219,6 +238,7 @@ bool StorageBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t ds
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
         absl::bind_front(&StorageBase::CreateEgressHub, this, conn_type, dst_node_id));
     if (hub == nullptr) {
+        HLOG_F(WARNING, "Failed to send shared log message. Hub is null. Connection type {}", gsl::narrow_cast<uint16_t>(conn_type));
         return false;
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
@@ -265,11 +285,13 @@ void StorageBase::OnConnectionClose(ConnectionBase* connection) {
     switch (connection->type() & kConnectionTypeMask) {
     case kSequencerIngressTypeId:
     case kEngineIngressTypeId:
+    case kIndexIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kSequencerEgressHubTypeId:
     case kEngineEgressHubTypeId:
+    case kIndexEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));

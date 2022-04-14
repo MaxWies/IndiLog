@@ -189,7 +189,11 @@ View::Engine::Engine(const View* view, uint16_t node_id,
       indexed_sequencer_node_set_(index_sequencer_nodes.begin(),
                                   index_sequencer_nodes.end()),
       index_shard_nodes_(index_shard_nodes),
-      next_storage_node_(0) {}
+      next_storage_node_(0) {
+          for(size_t i = 0; i < view->num_index_shards_; i++){
+              next_index_replica_node_.push_back(0);
+          }
+      }
 
 View::Sequencer::Sequencer(const View* view, uint16_t node_id,
                            const View::NodeIdVec& replica_sequencer_nodes,

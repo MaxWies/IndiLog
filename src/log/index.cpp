@@ -185,6 +185,7 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
         size_t num_tags = index_data.user_tag_sizes(i);
         uint32_t seqnum = index_data.seqnum_halves(i);
         if (seqnum < indexed_seqnum_position_) {
+            HVLOG_F(1, "Seqnum={} lower than IndexedSeqnumPosition={}", seqnum, indexed_seqnum_position_);
             tag_iter += num_tags;
             continue;
         }
@@ -221,13 +222,16 @@ void Index::MakeQuery(const IndexQuery& query) {
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
+            HVLOG(1) << "Can process query. View in index higher.";
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
+                HVLOG(1) << "Can process query. Metalog in index equal or higher.";
                 ProcessQuery(query);
             } else {
+                HVLOG_F(1, "Query has higher metalog position: Query metalog_progress={}, Index metalog_progress={}. Add query to pending queries.", position, indexed_metalog_position_);
                 pending_queries_.insert(std::make_pair(position, query));
             }
         }
@@ -267,6 +271,10 @@ void Index::OnMetaLogApplied(const MetaLogProto& meta_log_proto) {
     AdvanceIndexProgress();
 }
 
+void Index::AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum) {
+    cuts_.push_back(std::make_pair(metalog_seqnum, next_seqnum));
+}
+
 void Index::OnFinalized(uint32_t metalog_position) {
     auto iter = pending_queries_.begin();
     while (iter != pending_queries_.end()) {
@@ -278,9 +286,11 @@ void Index::OnFinalized(uint32_t metalog_position) {
 }
 
 void Index::AdvanceIndexProgress() {
+    HVLOG(1) << "Advance index progress";
     while (!cuts_.empty()) {
         uint32_t end_seqnum = cuts_.front().second;
         if (data_received_seqnum_position_ < end_seqnum) {
+            HVLOG_F(1, "DataReceivedSeqnumPosition={} is lower then endSeqnum={} of cut.", bits::HexStr0x(data_received_seqnum_position_), bits::HexStr0x(end_seqnum));
             break;
         }
         HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));

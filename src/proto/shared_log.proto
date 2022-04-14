@@ -120,11 +120,15 @@ message LogEntryProto {
 message IndexDataProto {
     uint32 logspace_id  = 1;
 
-    repeated uint32 seqnum_halves  = 2;
-    repeated uint32 engine_ids     = 3;
-    repeated uint32 user_logspaces = 4;
-    repeated uint32 user_tag_sizes = 5;
-    repeated uint64 user_tags      = 6;
+    uint32 metalog_position = 2;
+    uint32 next_seqnum = 3;
+    bool has_index_data = 4;
+
+    repeated uint32 seqnum_halves  = 5;
+    repeated uint32 engine_ids     = 6;
+    repeated uint32 user_logspaces = 7;
+    repeated uint32 user_tag_sizes = 8;
+    repeated uint64 user_tags      = 9;
 }
 
 message IndexResultProto {

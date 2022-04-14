@@ -105,6 +105,8 @@ std::string IngressConnection::GetLogHeader(int type, int sockfd) {
         return fmt::format("SequencerIngress[{}]: ", type - masked_type);
     case kStorageIngressTypeId:
         return fmt::format("StorageIngress[{}]: ", type - masked_type);
+    case kIndexIngressTypeId:
+        return fmt::format("IndexIngress[{}]: ", type - masked_type);
     default:
         return fmt::format("IngressConn[{}-{}]: ", type, sockfd);
     }

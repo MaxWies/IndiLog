@@ -297,6 +297,10 @@ std::optional<IndexDataProto> LogStorage::PollIndexData() {
     data.Swap(&index_data_);
     index_data_.Clear();
     index_data_.set_logspace_id(identifier());
+    // necessary to update metalog relevant data in index tier
+    data.set_has_index_data(true);
+    data.set_metalog_position(metalog_position());
+    data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
     return data;
 }
 

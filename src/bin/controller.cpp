@@ -9,6 +9,7 @@ ABSL_FLAG(uint32_t, random_seed, 23333, "Random seed");
 ABSL_FLAG(size_t, metalog_replicas, 3, "Replicas for meta logs");
 ABSL_FLAG(size_t, userlog_replicas, 3, "Replicas for users' logs");
 ABSL_FLAG(size_t, index_replicas, 3, "Replicas for log index");
+ABSL_FLAG(size_t, index_shards, 1, "Index shards");
 ABSL_FLAG(size_t, num_phylogs, 1, "Number of physical logs");
 
 namespace faas {
@@ -31,6 +32,7 @@ void ControllerMain(int argc, char* argv[]) {
     controller->set_metalog_replicas(absl::GetFlag(FLAGS_metalog_replicas));
     controller->set_userlog_replicas(absl::GetFlag(FLAGS_userlog_replicas));
     controller->set_index_replicas(absl::GetFlag(FLAGS_index_replicas));
+    controller->set_index_shards(absl::GetFlag(FLAGS_index_shards));
     controller->set_num_phylogs(absl::GetFlag(FLAGS_num_phylogs));
 
     controller->Start();

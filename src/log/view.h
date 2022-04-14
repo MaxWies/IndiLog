@@ -3,6 +3,7 @@
 #include "base/common.h"
 #include "utils/hash.h"
 #include "utils/bits.h"
+#include "utils/io.h"
 
 __BEGIN_THIRD_PARTY_HEADERS
 #include "proto/shared_log.pb.h"
@@ -86,16 +87,20 @@ public:
 
         uint16_t PickIndexNode(size_t shard) const {
             View::NodeIdVec index_nodes = index_shard_nodes_.at(shard);
-            size_t next_index_node = next_index_shard_node_.at(shard);
+            size_t next_index_node = next_index_replica_node_.at(shard);
             size_t idx = __atomic_fetch_add(&next_index_node, 1, __ATOMIC_RELAXED);
             return index_nodes.at(idx % index_nodes.size());
         }
 
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {
             size_t first_shard = PickIndexShard(); // node of shard is master
+            LOG_F(INFO, "Master shard is {} of {} shards", first_shard, view_->num_index_shards_);
             for (size_t i = first_shard; i < view_->num_index_shards_ + first_shard ; i++) {
                 size_t j = i % view_->num_index_shards_;
-                sharded_index_nodes.push_back(PickIndexNode(j));
+                DCHECK_LE(j, static_cast<size_t>(view_->num_index_shards_ - 1));
+                uint16_t index_node = PickIndexNode(j);
+                LOG_F(INFO, "Pick index node {} of shard {}", index_node, j);
+                sharded_index_nodes.push_back(index_node);
             } 
         }
 
@@ -111,7 +116,7 @@ public:
         View::NodeIdVec storage_nodes_;
         absl::flat_hash_set<uint16_t> indexed_sequencer_node_set_;
 
-        std::vector<size_t> next_index_shard_node_;
+        std::vector<size_t> next_index_replica_node_;
         std::vector<View::NodeIdVec> index_shard_nodes_;
 
         mutable size_t next_index_shard;
@@ -197,6 +202,18 @@ public:
             return source_engine_node_set_.contains(engine_node_id);
         }
 
+        // bool IsIndexDataSenderThisRound(uint16_t node_id) const {
+        //     size_t idx = __atomic_fetch_add(&next_index_data_sender, 1, __ATOMIC_RELAXED);
+        //     size_t j = idx % view_->index_replicas_;
+        //     for(size_t i = 0; i < view_->storage_node_ids_.size(); i++){
+        //         size_t u = i % view_->index_replicas_;
+
+        //     }
+        //     for (uint16_t storage_node : view_->storage_node_ids_){
+                
+        //     }
+        // }
+
         // const View::NodeIdVec& GetIndexShardNodes(size_t shard) const {
         //     return index_shard_nodes_.at(shard);
         // }
@@ -216,6 +233,7 @@ public:
 
         std::vector<View::NodeIdVec> index_shard_nodes_;
         mutable size_t next_index_shard_;
+        mutable size_t next_index_data_sender;
 
         Storage(const View* view, uint16_t node_id,
                 const View::NodeIdVec& source_engine_nodes,

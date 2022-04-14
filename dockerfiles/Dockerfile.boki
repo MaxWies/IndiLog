@@ -13,5 +13,6 @@ COPY --from=builder /boki/bin/release/engine     /boki/engine
 COPY --from=builder /boki/bin/release/sequencer  /boki/sequencer
 COPY --from=builder /boki/bin/release/storage    /boki/storage
 COPY --from=builder /boki/bin/release/controller /boki/controller
+COPY --from=builder /boki/bin/release/index      /boki/index
 
 WORKDIR /boki

@@ -126,8 +126,10 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::SEQUENCER_TO_STORAGE,   NODE_PAIR(Sequencer, Storage) },
     { ConnType::STORAGE_TO_SEQUENCER,   NODE_PAIR(Storage, Sequencer) },
     { ConnType::ENGINE_TO_INDEX,        NODE_PAIR(Engine, Index) },
+    { ConnType::INDEX_TO_ENGINE,        NODE_PAIR(Index, Engine) },
     { ConnType::STORAGE_TO_INDEX,       NODE_PAIR(Storage, Index) },
     { ConnType::INDEX_TO_STORAGE,       NODE_PAIR(Index, Storage) },
+    { ConnType::INDEX_TO_INDEX,         NODE_PAIR(Index, Index) }
 };
 
 #undef NODE_PAIR

@@ -18,7 +18,7 @@ private:
 
     absl::Mutex view_mu_;
     const View* current_view_      ABSL_GUARDED_BY(view_mu_);
-    bool view_finalized_           ABSL_GUARDED_BY(view_mu_);
+    bool current_view_active_        ABSL_GUARDED_BY(view_mu_);
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<Index>
         index_collection_        ABSL_GUARDED_BY(view_mu_);
@@ -30,13 +30,14 @@ private:
     absl::flat_hash_map</* client_data */ uint64_t, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
 
     void OnViewCreated(const View* view) override;
+    void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
     void HandleReadRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
 
-    bool MergeIndexResult(IndexQueryResult index_query_result, IndexQueryResult* merged_index_query_result);
+    bool MergeIndexResult(const IndexQueryResult& index_query_result, IndexQueryResult* merged_index_query_result);
     void HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload) override;
 
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);

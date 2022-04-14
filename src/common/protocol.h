@@ -123,6 +123,8 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
+constexpr uint64_t kUseMasterNodeId   = std::numeric_limits<uint16_t>::max();
+
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
 constexpr uint32_t kAsyncInvokeFuncFlag           = (1 << 2);
@@ -240,10 +242,6 @@ struct SharedLogMessage {
 
     union {
         uint32_t payload_size;    // [8:12]
-        struct {
-            uint16_t master_node_id; // [8:10] (only used for index tier)
-            uint16_t _2_padding_2_;
-        } __attribute__ ((packed));
     };
 
     union {
@@ -264,6 +262,10 @@ struct SharedLogMessage {
         struct {
             uint16_t prev_view_id;
             uint16_t prev_engine_id;
+        } __attribute__ ((packed));
+        struct {
+            uint16_t use_master_node_id;
+            uint16_t master_node_id; // (only used for index tier)
         } __attribute__ ((packed));
     };
     union {

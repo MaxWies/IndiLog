@@ -314,6 +314,10 @@ const absl::flat_hash_map<ConnType, ConnTypeIdPair> kConnTypeIdTable {
     { ConnType::STORAGE_TO_ENGINE,      CONN_ID_PAIR(Storage, Engine) },
     { ConnType::SEQUENCER_TO_STORAGE,   CONN_ID_PAIR(Sequencer, Storage) },
     { ConnType::STORAGE_TO_SEQUENCER,   CONN_ID_PAIR(Storage, Sequencer) },
+    { ConnType::STORAGE_TO_INDEX,       CONN_ID_PAIR(Storage, Index) },
+    { ConnType::INDEX_TO_STORAGE,       CONN_ID_PAIR(Index, Storage) },
+    { ConnType::ENGINE_TO_INDEX,        CONN_ID_PAIR(Engine, Index) },
+    { ConnType::INDEX_TO_ENGINE,        CONN_ID_PAIR(Index, Engine) },
 };
 
 #undef CONN_ID_PAIR

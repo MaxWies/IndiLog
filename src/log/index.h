@@ -56,6 +56,12 @@ public:
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
     void PollQueryResults(QueryResultVec* results);
 
+    void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
+
+    uint32_t indexed_metalog_position(){
+        return indexed_metalog_position_;
+    }
+
 private:
     class PerSpaceIndex;
     absl::flat_hash_map</* user_logspace */ uint32_t,

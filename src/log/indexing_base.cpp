@@ -62,6 +62,7 @@ void IndexBase::SetupTimers() {
 void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
                                         const SharedLogMessage& message,
                                         std::span<const char> payload) {
+    HVLOG(1) << "Receive SharedLogMessage";
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     DCHECK(
         (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
@@ -81,21 +82,25 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
+        HVLOG(1) << "Handle read request";
         HandleReadRequest(message);
         break;
     case SharedLogOpType::INDEX_DATA:
+        HVLOG(1) << "Handle new index data";
         OnRecvNewIndexData(message, payload);
         break;
     case SharedLogOpType::INDEX_RESULT:
+        HVLOG(1) << "Handle slave result";
         HandleSlaveResult(message, payload);
         break;
     default:
+        LOG(ERROR) << "Operation type unknown";
         UNREACHABLE();
     }
 }
 
 namespace {
-static inline std::string SerializedIndexFoundResult(const IndexQueryResult& result) {
+static inline std::string SerializedIndexResult(const IndexQueryResult& result) {
     IndexResultProto index_result_proto;
     if (result.state == IndexQueryResult::kEmpty){
         index_result_proto.set_found(false);
@@ -126,7 +131,7 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     response.prev_view_id = result.original_query.prev_found_result.view_id;
     response.prev_engine_id = result.original_query.prev_found_result.engine_id;
     response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    std::string payload = SerializedIndexFoundResult(result);
+    std::string payload = SerializedIndexResult(result);
     response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
     uint16_t master_node_id = result.original_query.master_node_id;
     //master node id cannot be part of sharedlogmessage
@@ -150,7 +155,7 @@ void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
     response.prev_view_id = result.original_query.prev_found_result.view_id;
     response.prev_engine_id = result.original_query.prev_found_result.engine_id;
     response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    std::string payload = SerializedIndexFoundResult(result);
+    std::string payload = SerializedIndexResult(result);
     response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
     bool success = SendSharedLogMessage(
         protocol::ConnType::INDEX_TO_ENGINE,
@@ -206,6 +211,7 @@ bool IndexBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
         absl::bind_front(&IndexBase::CreateEgressHub, this, conn_type, dst_node_id));
     if (hub == nullptr) {
+        HLOG_F(WARNING, "Failed to send shared log message. Hub is null. Connection type {}", gsl::narrow_cast<uint16_t>(conn_type));
         return false;
     }
     std::span<const char> data(reinterpret_cast<const char*>(&message),
@@ -225,10 +231,13 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
 
     switch (type) {
     case protocol::ConnType::ENGINE_TO_INDEX:
+        HVLOG(1) << "ConnectionType: EngineToIndex";
         break;
     case protocol::ConnType::STORAGE_TO_INDEX:
+        HVLOG(1) << "ConnectionType: StorageToIndex";
         break;
     case protocol::ConnType::INDEX_TO_INDEX:
+        HVLOG(1) << "ConnectionType: IndexToIndex";
         break;
     default:
         HLOG(ERROR) << "Invalid connection type: " << handshake.conn_type;
@@ -256,11 +265,13 @@ void IndexBase::OnConnectionClose(ConnectionBase* connection) {
     switch (connection->type() & kConnectionTypeMask) {
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
+    case kIndexIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
+    case kIndexEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));

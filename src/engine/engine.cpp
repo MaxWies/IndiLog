@@ -155,12 +155,14 @@ void Engine::OnConnectionClose(ConnectionBase* connection) {
     case kSequencerIngressTypeId:
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
+    case kIndexIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kSequencerEgressHubTypeId:
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
+    case kIndexEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));
@@ -667,6 +669,7 @@ void Engine::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
     case protocol::ConnType::SEQUENCER_TO_ENGINE:
     case protocol::ConnType::STORAGE_TO_ENGINE:
     case protocol::ConnType::SLOG_ENGINE_TO_ENGINE:
+    case protocol::ConnType::INDEX_TO_ENGINE:
         if (enable_shared_log_) {
             CreateSharedLogIngressConn(sockfd, type, handshake.src_node_id);
             break;
