@@ -261,8 +261,11 @@ public:
         uint16_t PickStorageNode(uint16_t engine_node) const {
             size_t next_storage_node_ = next_engine_storage_node_.at(engine_node);
             size_t idx = __atomic_fetch_add(&next_storage_node_, 1, __ATOMIC_RELAXED);
+            size_t storage_node_pos = idx % view_->userlog_replicas_;
+            LOG_F(INFO, "Use storage node at position {}", storage_node_pos);
             std::vector<uint16_t> engine_storage_nodes = engine_storage_nodes_.at(engine_node);
-            return engine_storage_nodes.at(idx % engine_storage_nodes.size());
+            DCHECK_EQ(view_->userlog_replicas_, engine_storage_nodes.size());
+            return engine_storage_nodes.at(storage_node_pos);
         }
 
     private:

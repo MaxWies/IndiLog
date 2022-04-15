@@ -60,21 +60,22 @@ View::View(const ViewProto& view_proto)
     DCHECK_EQ(index_node_id_set.size(), num_index_nodes);
 
     // TODO: will be removed
-    DCHECK_EQ(static_cast<size_t>(view_proto.index_plan_size()),
-              num_sequencer_nodes * index_replicas_);
-    absl::flat_hash_map<uint16_t, std::vector<uint16_t>> index_engine_nodes;
-    absl::flat_hash_map<uint16_t, std::vector<uint16_t>> index_sequencer_nodes;
-    for (size_t i = 0; i < num_sequencer_nodes; i++) {
-        uint16_t sequencer_node_id = sequencer_node_ids_[i];
-        for (size_t j = 0; j < index_replicas_; j++) {
-            uint16_t engine_node_id = gsl::narrow_cast<uint16_t>(
-                view_proto.index_plan(static_cast<int>(i * index_replicas_ + j)));
-            DCHECK(engine_node_id_set.contains(engine_node_id));
-            index_engine_nodes[sequencer_node_id].push_back(engine_node_id);
-            index_sequencer_nodes[engine_node_id].push_back(sequencer_node_id);
-        }
-    }
+    // DCHECK_EQ(static_cast<size_t>(view_proto.index_plan_size()),
+    //           num_sequencer_nodes * index_replicas_);
+    // absl::flat_hash_map<uint16_t, std::vector<uint16_t>> index_engine_nodes;
+    // absl::flat_hash_map<uint16_t, std::vector<uint16_t>> index_sequencer_nodes;
+    // for (size_t i = 0; i < num_sequencer_nodes; i++) {
+    //     uint16_t sequencer_node_id = sequencer_node_ids_[i];
+    //     for (size_t j = 0; j < index_replicas_; j++) {
+    //         uint16_t engine_node_id = gsl::narrow_cast<uint16_t>(
+    //             view_proto.index_plan(static_cast<int>(i * index_replicas_ + j)));
+    //         DCHECK(engine_node_id_set.contains(engine_node_id));
+    //         index_engine_nodes[sequencer_node_id].push_back(engine_node_id);
+    //         index_sequencer_nodes[engine_node_id].push_back(sequencer_node_id);
+    //     }
+    // }
 
+    // TODO: index tier must respect sequence number spaces
     DCHECK_EQ(static_cast<size_t>(view_proto.index_tier_plan_size()),
               num_index_shards_ * index_replicas_);
     absl::flat_hash_map<size_t, std::vector<uint16_t>> index_shard_nodes_tmp;
@@ -120,8 +121,8 @@ View::View(const ViewProto& view_proto)
             this, node_id,
             NodeIdVec(storage_nodes[node_id].begin(),
                       storage_nodes[node_id].end()),
-            NodeIdVec(index_sequencer_nodes[node_id].begin(),
-                      index_sequencer_nodes[node_id].end()),
+            NodeIdVec(sequencer_node_id_set.begin(),
+                      sequencer_node_id_set.end()),
             index_shard_nodes));
     }
     for (size_t i = 0; i < num_engine_nodes; i++) {
@@ -140,8 +141,8 @@ View::View(const ViewProto& view_proto)
             this, node_id,
             NodeIdVec(replica_sequencer_nodes.begin(),
                       replica_sequencer_nodes.end()),
-            NodeIdVec(index_engine_nodes[node_id].begin(),
-                      index_engine_nodes[node_id].end())));
+            NodeIdVec(engine_node_id_set.begin(),
+                      engine_node_id_set.end())));
     }
     for (size_t i = 0; i < num_sequencer_nodes; i++) {
         sequencer_nodes_[sequencer_node_ids_[i]] = &sequencers_[i];
@@ -222,7 +223,8 @@ View::Index::Index(const View* view, uint16_t node_id,
                    const absl::flat_hash_map<uint16_t, std::vector<uint16_t>>& engine_storage_nodes)
     : view_(view),
       node_id_(node_id),
-      engine_storage_nodes_(engine_storage_nodes){
+      engine_storage_nodes_(engine_storage_nodes.begin(),
+                            engine_storage_nodes.end()){
           for(auto const& p : engine_storage_nodes){
               next_engine_storage_node_[p.first] = 0;
           }

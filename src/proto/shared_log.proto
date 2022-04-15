@@ -11,7 +11,7 @@ message ViewProto {
     uint32 userlog_replicas = 3;
     uint32 index_replicas   = 4;
     uint32 num_index_shards = 5;  // each index shard has $index_replicas
-    uint32 num_phylogs      = 13;
+    uint32 num_phylogs      = 12;
 
     // [Participant Nodes: Sequencer, Engine, and Storage]
     // All nodes have globally unique IDs (even across views)
@@ -45,18 +45,19 @@ message ViewProto {
     // Each physical log space has `index_replicas` indices, stored on engine nodes.
     // `index_plan` specifies this mapping, which has a length of
     // len(sequencer_nodes) * index_replicas.
-    repeated uint32 index_plan = 10;
+    // repeated uint32 index_plan = 10;
 
     // [Log Storage]
     // `storage_plan` specified storage nodes for each log shards, which has a
     // length of len(engine_nodes) * userlog_replicas.
     // Note that for each engine node, its shard of all physical log spaces
     // maps to the same set of storage nodes.
-    repeated uint32 storage_nodes = 11;
-    repeated uint32 storage_plan  = 12;
+    repeated uint32 storage_nodes = 10;
+    repeated uint32 storage_plan  = 11;
 
-    repeated uint32 index_nodes = 14;
-    repeated uint32 index_tier_plan = 15;
+    // [Log Index Tier]
+    repeated uint32 index_nodes = 13;
+    repeated uint32 index_tier_plan = 14;
 }
 
 message MetaLogProto {
@@ -122,11 +123,13 @@ message IndexDataProto {
 
     uint32 metalog_position = 2;
     uint32 next_seqnum = 3;
-    bool has_index_data = 4;
 
-    repeated uint32 seqnum_halves  = 5;
-    repeated uint32 engine_ids     = 6;
-    repeated uint32 user_logspaces = 7;
+    repeated uint32 user_logspaces = 4; //is always sent
+
+    bool has_index_data = 5;
+
+    repeated uint32 seqnum_halves  = 6;
+    repeated uint32 engine_ids     = 7;
     repeated uint32 user_tag_sizes = 8;
     repeated uint64 user_tags      = 9;
 }

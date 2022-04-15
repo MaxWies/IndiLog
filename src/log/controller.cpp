@@ -82,10 +82,10 @@ void Controller::ReconfigView(const Configuration& configuration) {
         return;
     }
     // TODO: will be removed
-    if (configuration.engine_nodes.size() < index_replicas_) {
-        HLOG(ERROR) << "Engine nodes not enough";
-        return;
-    }
+    // if (configuration.engine_nodes.size() < index_replicas_) {
+    //     HLOG(ERROR) << "Engine nodes not enough";
+    //     return;
+    // }
     if (configuration.storage_nodes.size() < userlog_replicas_) {
         HLOG(ERROR) << "Storage nodes not enough";
         return;
@@ -133,7 +133,7 @@ void Controller::ReconfigView(const Configuration& configuration) {
         view_proto.add_log_space_hash_tokens(token);
     }
 
-    size_t num_sequencers = configuration.sequencer_nodes.size();
+    // size_t num_sequencers = configuration.sequencer_nodes.size();
     size_t num_engines = configuration.engine_nodes.size();
     size_t num_storages = configuration.storage_nodes.size();
     size_t num_indexes = configuration.index_nodes.size();
@@ -142,9 +142,9 @@ void Controller::ReconfigView(const Configuration& configuration) {
         view_proto.add_storage_plan(configuration.storage_nodes.at(i % num_storages));
     }
     // TODO: will be removed
-    for (size_t i = 0; i < num_sequencers * index_replicas_; i++) {
-        view_proto.add_index_plan(configuration.engine_nodes.at(i % num_engines));
-    }
+    // for (size_t i = 0; i < num_sequencers * index_replicas_; i++) {
+    //     view_proto.add_index_plan(configuration.engine_nodes.at(i % num_engines));
+    // }
     // Index tier plan
     for (size_t i = 0; i < index_shards_; i++) {
         for (size_t j = 0; j < index_replicas_; j++) {

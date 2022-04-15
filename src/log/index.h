@@ -30,6 +30,7 @@ struct IndexQuery {
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
     protocol::SharedLogOpType DirectionToOpType() const;
+    protocol::SharedLogOpType DirectionToIndexResult() const;
 };
 
 struct IndexQueryResult {
@@ -57,6 +58,9 @@ public:
     void PollQueryResults(QueryResultVec* results);
 
     void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
+
+    void AdvanceIndexProgress();
+    void AdvanceIndexMetaProgress(const IndexDataProto& index_data);
 
     uint32_t indexed_metalog_position(){
         return indexed_metalog_position_;
@@ -94,8 +98,8 @@ private:
 
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;
-    void AdvanceIndexProgress();
     PerSpaceIndex* GetOrCreateIndex(uint32_t user_logspace);
+    void TryCreateIndex(uint32_t user_logspace);
 
     void ProcessQuery(const IndexQuery& query);
     void ProcessReadNext(const IndexQuery& query);

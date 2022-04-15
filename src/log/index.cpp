@@ -8,10 +8,13 @@ namespace log {
 IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpType op_type) {
     switch (op_type) {
     case protocol::SharedLogOpType::READ_NEXT:
+    case protocol::SharedLogOpType::READ_NEXT_INDEX_RESULT:
         return IndexQuery::kReadNext;
     case protocol::SharedLogOpType::READ_PREV:
+    case protocol::SharedLogOpType::READ_PREV_INDEX_RESULT:
         return IndexQuery::kReadPrev;
     case protocol::SharedLogOpType::READ_NEXT_B:
+    case protocol::SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
         return IndexQuery::kReadNextB;
     default:
         UNREACHABLE();
@@ -26,6 +29,19 @@ protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
         return protocol::SharedLogOpType::READ_PREV;
     case IndexQuery::kReadNextB:
         return protocol::SharedLogOpType::READ_NEXT_B;
+    default:
+        UNREACHABLE();
+    }
+}
+
+protocol::SharedLogOpType IndexQuery::DirectionToIndexResult() const {
+    switch (direction) {
+    case IndexQuery::kReadNext:
+        return protocol::SharedLogOpType::READ_NEXT_INDEX_RESULT;
+    case IndexQuery::kReadPrev:
+        return protocol::SharedLogOpType::READ_PREV_INDEX_RESULT;
+    case IndexQuery::kReadNextB:
+        return protocol::SharedLogOpType::READ_NEXT_B_INDEX_RESULT;
     default:
         UNREACHABLE();
     }
@@ -337,6 +353,46 @@ void Index::AdvanceIndexProgress() {
     }
 }
 
+void Index::AdvanceIndexMetaProgress(const IndexDataProto& index_data) {
+    for(uint32_t user_logspace : index_data.user_logspaces()){
+        TryCreateIndex(user_logspace);
+    }
+    HVLOG(1) << "Advance index meta progress";
+    while (!cuts_.empty()) {
+        uint32_t end_seqnum = cuts_.front().second;
+        DCHECK_GT(end_seqnum, indexed_seqnum_position_);
+        data_received_seqnum_position_+= end_seqnum - indexed_seqnum_position_;
+        indexed_seqnum_position_ = end_seqnum;
+        uint32_t metalog_seqnum = cuts_.front().first;
+        indexed_metalog_position_ = metalog_seqnum + 1;
+        cuts_.pop_front();
+    }
+    if (!blocking_reads_.empty()) {
+        int64_t current_timestamp = GetMonotonicMicroTimestamp();
+        std::vector<std::pair<int64_t, IndexQuery>> unfinished;
+        for (const auto& [start_timestamp, query] : blocking_reads_) {
+            if (!ProcessBlockingQuery(query)) {
+                if (current_timestamp - start_timestamp
+                        < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
+                    unfinished.push_back(std::make_pair(start_timestamp, query));
+                } else {
+                    pending_query_results_.push_back(BuildNotFoundResult(query));
+                }
+            }
+        }
+        blocking_reads_ = std::move(unfinished);
+    }
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        if (iter->first > indexed_metalog_position_) {
+            break;
+        }
+        const IndexQuery& query = iter->second;
+        ProcessQuery(query);
+        iter = pending_queries_.erase(iter);
+    }
+}
+
 Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
@@ -345,6 +401,14 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
     index_[user_logspace].reset(index);
     return index;
+}
+
+void Index::TryCreateIndex(uint32_t user_logspace) {
+    if (!index_.contains(user_logspace)) {
+        HVLOG_F(1, "Create index of user logspace {}", user_logspace);
+        PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
+        index_[user_logspace].reset(index);
+    }
 }
 
 void Index::ProcessQuery(const IndexQuery& query) {

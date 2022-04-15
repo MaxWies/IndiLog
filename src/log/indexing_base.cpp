@@ -69,7 +69,9 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
-     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::INDEX_RESULT)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_INDEX_RESULT)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_PREV_INDEX_RESULT)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B_INDEX_RESULT)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
@@ -89,7 +91,9 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
         HVLOG(1) << "Handle new index data";
         OnRecvNewIndexData(message, payload);
         break;
-    case SharedLogOpType::INDEX_RESULT:
+    case SharedLogOpType::READ_NEXT_INDEX_RESULT:
+    case SharedLogOpType::READ_PREV_INDEX_RESULT:
+    case SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
         HVLOG(1) << "Handle slave result";
         HandleSlaveResult(message, payload);
         break;
@@ -120,7 +124,7 @@ static inline std::string SerializedIndexResult(const IndexQueryResult& result) 
 }  // namespace
 
 void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
-    SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse();
+    SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
     response.client_data = result.original_query.client_data;
@@ -143,9 +147,10 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     }
 }
 
+//not used so far
 void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
     uint16_t engine_id = result.original_query.origin_node_id;
-    SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse();
+    SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
     response.client_data = result.original_query.client_data;
@@ -182,6 +187,7 @@ void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::
 
 bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
                                         const View::Engine* engine_node) {
+    HVLOG_F(1, "Send StorageReadRequest for seqnum={}", bits::HexStr0x(result.found_result.seqnum));
     static constexpr int kMaxRetries = 3;
     DCHECK(result.state == IndexQueryResult::kFound);
 

@@ -98,7 +98,9 @@ enum class SharedLogOpType : uint16_t {
     SHARD_PROG  = 0x13,  // Storage to Sequencer
     METALOGS    = 0x14,  // Sequencer to Sequencer, Engine, Storage, Index
     META_PROG   = 0x15,  // Sequencer to Sequencer
-    INDEX_RESULT = 0x25, // IndexNode to IndexNode, IndexNode to Engine
+    READ_NEXT_INDEX_RESULT = 0x16, // IndexNode to IndexNode, IndexNode to Engine
+    READ_PREV_INDEX_RESULT = 0x17, // IndexNode to IndexNode, IndexNode to Engine
+    READ_NEXT_B_INDEX_RESULT = 0x18, // IndexNode to IndexNode, IndexNode to Engine
     RESPONSE    = 0x20
 };
 
@@ -115,8 +117,7 @@ enum class SharedLogResultType : uint16_t {
     DISCARDED   = 0x31,  // Log to append is discarded
     EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
     DATA_LOST   = 0x33,  // Failed to extract log data
-    TRIM_FAILED = 0x34,
-    NO_INDEX    = 0x35,  // No index for log space
+    TRIM_FAILED = 0x34
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -647,9 +648,15 @@ public:
         return NewResponse(SharedLogResultType::DATA_LOST);
     }
 
-    static SharedLogMessage NewIndexResultResponse() {
+    static SharedLogMessage NewIndexResultResponse(SharedLogOpType type) {
+        DCHECK(
+            type == SharedLogOpType::READ_NEXT_INDEX_RESULT || 
+            type == SharedLogOpType::READ_PREV_INDEX_RESULT ||
+            type == SharedLogOpType::READ_NEXT_B_INDEX_RESULT
+        );
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
-        message.op_type = static_cast<uint16_t>(SharedLogOpType::INDEX_RESULT);
+
+        message.op_type = static_cast<uint16_t>(type);
         return message;
     }
 

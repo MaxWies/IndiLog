@@ -176,6 +176,9 @@ void StorageBase::SendIndexData(const View* view,
     index_data_proto_short.set_logspace_id(index_data_proto.logspace_id());
     index_data_proto_short.set_metalog_position(index_data_proto.metalog_position());
     index_data_proto_short.set_next_seqnum(index_data_proto.next_seqnum());
+    for(const uint32_t& user_logspace : index_data_proto.user_logspaces()){
+        index_data_proto_short.add_user_logspaces(user_logspace);
+    }
     index_data_proto_short.set_has_index_data(false);
     std::string serialized_data_short;
     CHECK(index_data_proto_short.SerializeToString(&serialized_data_short));
