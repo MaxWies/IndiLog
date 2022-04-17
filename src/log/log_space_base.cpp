@@ -43,8 +43,10 @@ bool LogSpaceBase::ProvideMetaLog(const MetaLogProto& meta_log) {
     }
     uint32_t seqnum = meta_log.metalog_seqnum();
     if (seqnum < metalog_position_) {
+        HLOG_F(WARNING, "MetalogUpdate: Cannot apply metalog because metalog_seqnum={} from metalog lower than metalog_position={}", seqnum, metalog_position_);
         return false;
     }
+    HVLOG_F(1, "MetalogUpdate: Apply metalog_seqnum={}", seqnum);
     MetaLogProto* meta_log_copy = metalog_pool_.Get();
     meta_log_copy->CopyFrom(meta_log);
     pending_metalogs_[seqnum] = meta_log_copy;
@@ -124,6 +126,7 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
         default:
             UNREACHABLE();
         }
+        HVLOG(1) << "MetalogUpdate: Increase metalog_position by 1";
         metalog_position_ = meta_log->metalog_seqnum() + 1;
         OnMetaLogApplied(*meta_log);
         iter = pending_metalogs_.erase(iter);
@@ -163,7 +166,7 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
             const auto& new_logs = meta_log.new_logs_proto();
             const View::NodeIdVec& engine_node_ids = view_->GetEngineNodes();
             uint32_t start_seqnum = new_logs.start_seqnum();
-            HVLOG_F(1, "Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
+            HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                     meta_log.metalog_seqnum(), start_seqnum);
             for (size_t i = 0; i < engine_node_ids.size(); i++) {
                 uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));

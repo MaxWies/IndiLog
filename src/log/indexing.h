@@ -27,7 +27,7 @@ private:
     utils::ThreadSafeObjectPool<IndexReadOp> index_read_op_pool_;
     std::atomic<uint64_t> next_index_read_op_id_;
     log_utils::FutureRequests future_requests_;
-    absl::flat_hash_map</* client_data */ uint64_t, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
+    absl::flat_hash_map<std::pair</*engine_id*/uint16_t, /* client_data */ uint64_t>, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
 
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
@@ -37,7 +37,7 @@ private:
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
 
-    bool MergeIndexResult(const IndexQueryResult& index_query_result, IndexQueryResult* merged_index_query_result);
+    bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
     void HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload) override;
 
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
@@ -55,7 +55,7 @@ private:
 
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
-    IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
+    IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message, const uint16_t original_requester_id);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
 
     IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result);

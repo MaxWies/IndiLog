@@ -240,6 +240,9 @@ void LogStorage::ReadAt(const protocol::SharedLogMessage& request) {
     DCHECK_EQ(request.logspace_id, identifier());
     uint64_t seqnum = bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf);
     if (seqnum >= seqnum_position()) {
+            HLOG_F(WARNING, "ReadRecord: Add to pending read request. storage_seqnum_position={}, seqnum={}", 
+            bits::HexStr0x(seqnum_position()), bits::HexStr0x(seqnum)
+        );
         pending_read_requests_.insert(std::make_pair(seqnum, request));
         return;
     }
@@ -254,7 +257,7 @@ void LogStorage::ReadAt(const protocol::SharedLogMessage& request) {
     } else if (seqnum < persisted_seqnum_position_) {
         result.status = ReadResult::kLookupDB;
     } else {
-        HLOG_F(WARNING, "Failed to locate seqnum {}", bits::HexStr0x(seqnum));
+        HLOG_F(WARNING, "ReadRecord: Failed to locate seqnum {}", bits::HexStr0x(seqnum));
     }
     pending_read_results_.push_back(std::move(result));
 }
@@ -291,7 +294,13 @@ void LogStorage::PollReadResults(ReadResultVec* results) {
 
 std::optional<IndexDataProto> LogStorage::PollIndexData() {
     if (index_data_.seqnum_halves_size() == 0) {
-        return std::nullopt;
+        HVLOG(1) << "MetalogUpdate: No new index data created. Message will only contain metadata";
+        // we need at least the metadata
+        IndexDataProto data;
+        data.set_logspace_id(identifier());
+        data.set_has_index_data(false);
+        data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
+        return data;
     }
     IndexDataProto data;
     data.Swap(&index_data_);
@@ -299,7 +308,6 @@ std::optional<IndexDataProto> LogStorage::PollIndexData() {
     index_data_.set_logspace_id(identifier());
     // necessary to update metalog relevant data in index tier
     data.set_has_index_data(true);
-    data.set_metalog_position(metalog_position());
     data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
     return data;
 }
@@ -317,9 +325,12 @@ std::optional<std::vector<uint32_t>> LogStorage::GrabShardProgressForSending() {
     return progress;
 }
 
+// delta and start_localid in the context of an engine
+// start_seqnum is increased for each engine
 void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
                            uint32_t delta) {
+    HVLOG_F(1, "MetalogUpdate: Create index data from metalog_seqnum={}, start_seqnum={}, start_localid={}, delta={}", metalog_seqnum, start_seqnum, start_localid, delta);
     auto iter = pending_read_requests_.begin();
     while (iter != pending_read_requests_.end() && iter->first < start_seqnum) {
         HLOG_F(WARNING, "Read request for seqnum {} has past", bits::HexStr0x(iter->first));
@@ -334,13 +345,13 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
         uint64_t seqnum = start_seqnum + i;
         uint64_t localid = start_localid + i;
         if (!pending_log_entries_.contains(localid)) {
-            HLOG_F(FATAL, "Cannot find pending log entry for localid {}",
+            HLOG_F(FATAL, "MetalogUpdate: Cannot find pending log entry for localid {}",
                    bits::HexStr0x(localid));
         }
         // Build the log entry for live_log_entries_
         LogEntry* log_entry = pending_log_entries_[localid].release();
         pending_log_entries_.erase(localid);
-        HVLOG_F(1, "Finalize the log entry (seqnum={}, localid={})",
+        HVLOG_F(1, "MetalogUpdate: Finalize the log entry (seqnum={}, localid={})",
                 bits::HexStr0x(seqnum), bits::HexStr0x(localid));
         log_entry->metadata.seqnum = seqnum;
         std::shared_ptr<const LogEntry> log_entry_ptr(log_entry);

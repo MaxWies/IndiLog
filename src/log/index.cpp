@@ -54,6 +54,7 @@ Index::Index(const View* view, uint16_t sequencer_id)
       indexed_seqnum_position_(0) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
+    number_storage_shards_ = view->num_engine_nodes(); //Todo: dirty
 }
 
 Index::~Index() {}
@@ -226,33 +227,32 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
     while (received_data_.count(data_received_seqnum_position_) > 0) {
         data_received_seqnum_position_++;
     }
-    AdvanceIndexProgress();
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
     if (query.initial) {
-        HVLOG(1) << "Receive initial query";
+        HVLOG(1) << "IndexRead: Receive initial query";
         uint16_t view_id = log_utils::GetViewId(query.metalog_progress);
         if (view_id > view_->id()) {
-            HLOG_F(FATAL, "Cannot process query with metalog_progress from the future: "
+            HLOG_F(FATAL, "IndexRead: Cannot process query with metalog_progress from the future: "
                           "metalog_progress={}, my_view_id={}",
                    bits::HexStr0x(query.metalog_progress), bits::HexStr0x(view_->id()));
         } else if (view_id < view_->id()) {
-            HVLOG(1) << "Can process query. View in index higher.";
+            HVLOG(1) << "IndexRead: Can process query. View in index higher.";
             ProcessQuery(query);
         } else {
             DCHECK_EQ(view_id, view_->id());
             uint32_t position = bits::LowHalf64(query.metalog_progress);
             if (position <= indexed_metalog_position_) {
-                HVLOG(1) << "Can process query. Metalog in index equal or higher.";
+                HVLOG(1) << "IndexRead: Can process query. Metalog in index equal or higher.";
                 ProcessQuery(query);
             } else {
-                HVLOG_F(1, "Query has higher metalog position: Query metalog_progress={}, Index metalog_progress={}. Add query to pending queries.", position, indexed_metalog_position_);
+                HVLOG_F(1, "IndexRead: Query has higher metalog position: Query metalog_progress={}, Index metalog_progress={}. Add query to pending queries.", position, indexed_metalog_position_);
                 pending_queries_.insert(std::make_pair(position, query));
             }
         }
     } else {
-        HVLOG(1) << "Receive continue query";
+        HVLOG(1) << "IndexRead: Receive continue query";
         if (finalized()) {
             ProcessQuery(query);
         } else {
@@ -353,51 +353,115 @@ void Index::AdvanceIndexProgress() {
     }
 }
 
-void Index::AdvanceIndexMetaProgress(const IndexDataProto& index_data) {
-    for(uint32_t user_logspace : index_data.user_logspaces()){
-        TryCreateIndex(user_logspace);
-    }
-    HVLOG(1) << "Advance index meta progress";
-    while (!cuts_.empty()) {
-        uint32_t end_seqnum = cuts_.front().second;
-        DCHECK_GT(end_seqnum, indexed_seqnum_position_);
-        data_received_seqnum_position_+= end_seqnum - indexed_seqnum_position_;
-        indexed_seqnum_position_ = end_seqnum;
-        uint32_t metalog_seqnum = cuts_.front().first;
-        indexed_metalog_position_ = metalog_seqnum + 1;
-        cuts_.pop_front();
-    }
-    if (!blocking_reads_.empty()) {
-        int64_t current_timestamp = GetMonotonicMicroTimestamp();
-        std::vector<std::pair<int64_t, IndexQuery>> unfinished;
-        for (const auto& [start_timestamp, query] : blocking_reads_) {
-            if (!ProcessBlockingQuery(query)) {
-                if (current_timestamp - start_timestamp
-                        < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
-                    unfinished.push_back(std::make_pair(start_timestamp, query));
-                } else {
-                    pending_query_results_.push_back(BuildNotFoundResult(query));
-                }
+bool Index::AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data) {
+    size_t c = 0;
+    for(const uint16_t& storage_shard : storage_shards){
+        for(const uint32_t& metalog_position : index_data.metalog_positions()){
+            if(!TryAddToIndexUpdates(metalog_position, storage_shard)){
+                c++;
+                HVLOG_F(1, "IndexUpdate: (Parts) of index update for storageShard={} already received from other storage node", storage_shard);
             }
         }
-        blocking_reads_ = std::move(unfinished);
     }
-    auto iter = pending_queries_.begin();
-    while (iter != pending_queries_.end()) {
-        if (iter->first > indexed_metalog_position_) {
+    if(storage_shards.size() * gsl::narrow_cast<size_t>(index_data.metalog_positions_size()) <= c){
+        HVLOG(1) << "IndexUpdate: Storage shards already fully seen";
+        return false;
+    }
+    HVLOG(1) << "IndexUpdate: Advance index progress";
+    if(index_data.has_index_data()){
+        HVLOG(1) << "IndexUpdate: Contains index data";
+        ProvideIndexData(index_data);
+        auto iter = received_data_.begin();
+        while (iter != received_data_.end()) {
+            uint32_t seqnum = iter->first;
+            const IndexData& index_data = iter->second;
+            GetOrCreateIndex(index_data.user_logspace)->Add(
+                seqnum, index_data.engine_id, index_data.user_tags);
+            iter = received_data_.erase(iter);
+        }
+    } else {
+        HVLOG(1) << "IndexUpdate: Contains only meta data";
+        for(uint32_t user_logspace : index_data.user_logspaces()){
+            TryCreateIndex(user_logspace);
+        }   
+    }
+    if(TryCompleteIndexUpdates()){
+        if (!blocking_reads_.empty()) {
+            int64_t current_timestamp = GetMonotonicMicroTimestamp();
+            std::vector<std::pair<int64_t, IndexQuery>> unfinished;
+            for (const auto& [start_timestamp, query] : blocking_reads_) {
+                if (!ProcessBlockingQuery(query)) {
+                    if (current_timestamp - start_timestamp
+                            < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
+                        unfinished.push_back(std::make_pair(start_timestamp, query));
+                    } else {
+                        pending_query_results_.push_back(BuildNotFoundResult(query));
+                    }
+                }
+            }
+            blocking_reads_ = std::move(unfinished);
+        }
+        auto iter = pending_queries_.begin();
+        while (iter != pending_queries_.end()) {
+            if (iter->first > indexed_metalog_position_) {
+                break;
+            }
+            const IndexQuery& query = iter->second;
+            ProcessQuery(query);
+            iter = pending_queries_.erase(iter);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool Index::TryCompleteIndexUpdates(){
+    std::vector<uint32_t> completed_updates_for_metalog;
+    for(uint32_t metalog_position = indexed_metalog_position_ + 1; 
+        metalog_position <= indexed_metalog_position_ + storage_shards_index_updates_.size(); 
+        metalog_position++){
+        if(storage_shards_index_updates_.contains(metalog_position)){
+            size_t storage_shard_updates = storage_shards_index_updates_.at(metalog_position).size();
+            DCHECK_LE(storage_shard_updates, number_storage_shards_);
+            if(storage_shard_updates == number_storage_shards_){
+                completed_updates_for_metalog.push_back(metalog_position);
+            } else {
+                // metalog only increases by 1
+                HVLOG_F(1, "IndexUpdate: metalog_position={} only received shard_updates={} yet", metalog_position, storage_shard_updates);
+                break;
+            }
+        } else {
+            //gaps are not allowed
+            HVLOG_F(1, "IndexUpdate: metalog_position={} without any shard_updates yet", metalog_position);
             break;
         }
-        const IndexQuery& query = iter->second;
-        ProcessQuery(query);
-        iter = pending_queries_.erase(iter);
     }
+    for(uint32_t metalog_position : completed_updates_for_metalog){
+        DCHECK_LT(indexed_metalog_position_, metalog_position);
+        indexed_metalog_position_ = metalog_position;
+        storage_shards_index_updates_.erase(metalog_position);
+    }
+    return 0 < completed_updates_for_metalog.size();
+}
+
+bool Index::TryAddToIndexUpdates(uint32_t metalog_position, uint16_t storage_shard_id){
+    if(!storage_shards_index_updates_.contains(metalog_position)){
+        storage_shards_index_updates_.insert({metalog_position, absl::flat_hash_set<uint16_t>{storage_shard_id}});
+        return true;
+    }
+    if(!storage_shards_index_updates_[metalog_position].contains(storage_shard_id)){
+        storage_shards_index_updates_[metalog_position].insert(storage_shard_id);
+        return true;
+    }
+    LOG_F(WARNING, "IndexUpdate: storage_shard={} for metalog_position={} from storage_shard={} already known", storage_shard_id, bits::HexStr0x(metalog_position), storage_shard_id);
+    return false;
 }
 
 Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     if (index_.contains(user_logspace)) {
         return index_.at(user_logspace).get();
     }
-    HVLOG_F(1, "Create index of user logspace {}", user_logspace);
+    HVLOG_F(1, "IndexUpdate: Create index of user logspace {}", user_logspace);
     PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
     index_[user_logspace].reset(index);
     return index;
@@ -405,7 +469,7 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
 
 void Index::TryCreateIndex(uint32_t user_logspace) {
     if (!index_.contains(user_logspace)) {
-        HVLOG_F(1, "Create index of user logspace {}", user_logspace);
+        HVLOG_F(1, "IndexUpdate: Create index of user logspace {}", user_logspace);
         PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
         index_[user_logspace].reset(index);
     }
@@ -426,12 +490,12 @@ void Index::ProcessQuery(const IndexQuery& query) {
 
 void Index::ProcessReadNext(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNext);
-    HVLOG_F(1, "ProcessReadNext: seqnum={}, logspace={}, tag={}",
+    HVLOG_F(1, "IndexRead: ProcessReadNext: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id > view_->id()) {
         pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG(1) << "ProcessReadNext: NotFoundResult";
+        HVLOG(1) << "IndexRead: ProcessReadNext: NotFoundResult";
         return;
     }
     uint64_t seqnum;
@@ -441,35 +505,35 @@ void Index::ProcessReadNext(const IndexQuery& query) {
         if (found) {
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), seqnum, engine_id));
-            HVLOG_F(1, "ProcessReadNext: FoundResult: seqnum={}", seqnum);
+            HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult: seqnum={}", seqnum);
         } else {
             if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
                 const IndexFoundResult& found_result = query.prev_found_result;
                 pending_query_results_.push_back(
                     BuildFoundResult(query, found_result.view_id,
                                      found_result.seqnum, found_result.engine_id));
-                HVLOG_F(1, "ProcessReadNext: FoundResult (from prev_result): seqnum={}",
+                HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult (from prev_result): seqnum={}",
                         found_result.seqnum);
             } else {
                 pending_query_results_.push_back(BuildNotFoundResult(query));
-                HVLOG(1) << "ProcessReadNext: NotFoundResult";
+                HVLOG(1) << "IndexRead: ProcessReadNext: NotFoundResult";
             }
         }
     } else {
         pending_query_results_.push_back(
             BuildContinueResult(query, found, seqnum, engine_id));
-        HVLOG(1) << "ProcessReadNext: ContinueResult";
+        HVLOG(1) << "IndexRead: ProcessReadNext: ContinueResult";
     }
 }
 
 void Index::ProcessReadPrev(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadPrev);
-    HVLOG_F(1, "ProcessReadPrev: seqnum={}, logspace={}, tag={}",
+    HVLOG_F(1, "IndexRead: ProcessReadPrev: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id < view_->id()) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
-        HVLOG(1) << "ProcessReadPrev: ContinueResult";
+        HVLOG(1) << "IndexRead: ProcessReadPrev: ContinueResult";
         return;
     }
     uint64_t seqnum;
@@ -478,13 +542,13 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     if (found) {
         pending_query_results_.push_back(
             BuildFoundResult(query, view_->id(), seqnum, engine_id));
-        HVLOG_F(1, "ProcessReadPrev: FoundResult: seqnum={}", seqnum);
+        HVLOG_F(1, "IndexRead: ProcessReadPrev: FoundResult: seqnum={}", seqnum);
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
-        HVLOG(1) << "ProcessReadPrev: ContinueResult";
+        HVLOG(1) << "IndexRead: ProcessReadPrev: ContinueResult";
     } else {
         pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG(1) << "ProcessReadPrev: NotFoundResult";
+        HVLOG(1) << "IndexRead: ProcessReadPrev: NotFoundResult";
     }
 }
 

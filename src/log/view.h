@@ -114,6 +114,7 @@ public:
         uint16_t node_id_;
 
         View::NodeIdVec storage_nodes_;
+        // todo: rename
         absl::flat_hash_set<uint16_t> indexed_sequencer_node_set_;
 
         std::vector<size_t> next_index_replica_node_;
@@ -194,6 +195,7 @@ public:
         const View* view() const { return view_; }
         uint16_t node_id() const { return node_id_; }
 
+        // aka my shards
         const View::NodeIdVec& GetSourceEngineNodes() const {
             return source_engine_nodes_;
         }

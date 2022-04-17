@@ -165,16 +165,18 @@ void StorageBase::SendIndexData(const View* view,
     const View::Storage* storage_node = view->GetStorageNode(my_node_id());
     const View::NodeIdVec& index_shard_nodes = storage_node->PickIndexShardNodes();
     for(uint16_t index_id : index_shard_nodes){
-        HVLOG_F(1, "Send index data to index node {}", index_id);
+        HVLOG_F(1, "MetalogUpdate: Send full index data to index node {}", index_id);
         SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
                             index_id, message, STRING_AS_SPAN(serialized_data));
     }
 
     // dirty
-    // send metalog data to shard
+    // send metalog data to other shards
     IndexDataProto index_data_proto_short;
     index_data_proto_short.set_logspace_id(index_data_proto.logspace_id());
-    index_data_proto_short.set_metalog_position(index_data_proto.metalog_position());
+    for(const uint32_t& metalog_position : index_data_proto.metalog_positions()){
+        index_data_proto_short.add_metalog_positions(metalog_position);
+    }
     index_data_proto_short.set_next_seqnum(index_data_proto.next_seqnum());
     for(const uint32_t& user_logspace : index_data_proto.user_logspaces()){
         index_data_proto_short.add_user_logspaces(user_logspace);
@@ -186,9 +188,11 @@ void StorageBase::SendIndexData(const View* view,
     message_short.origin_node_id = node_id_;
     message_short.payload_size = gsl::narrow_cast<uint32_t>(serialized_data_short.size());
     for(uint16_t index_id : view->GetIndexNodes()){
-        HVLOG_F(1, "Send metalog data to index node {}", index_id);
-        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
-                            index_id, message_short, STRING_AS_SPAN(serialized_data_short));
+        if(std::find(index_shard_nodes.begin(), index_shard_nodes.end(), index_id) == index_shard_nodes.end()){
+            HVLOG_F(1, "MetalogUpdate: Send short index data to index node {}", index_id);
+            SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
+                                index_id, message_short, STRING_AS_SPAN(serialized_data_short));
+        }
     }
 }
 

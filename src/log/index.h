@@ -60,7 +60,10 @@ public:
     void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
 
     void AdvanceIndexProgress();
-    void AdvanceIndexMetaProgress(const IndexDataProto& index_data);
+    bool AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data);
+
+    bool TryCompleteIndexUpdates();
+    bool TryAddToIndexUpdates(uint32_t metalog_position, uint16_t storage_shard_id);
 
     uint32_t indexed_metalog_position(){
         return indexed_metalog_position_;
@@ -82,6 +85,10 @@ private:
     std::deque<std::pair</* metalog_seqnum */ uint32_t,
                          /* end_seqnum */ uint32_t>> cuts_;
     uint32_t indexed_metalog_position_;
+
+    // for index tier
+    size_t number_storage_shards_;
+    absl::flat_hash_map<uint32_t /* metalog_position */, absl::flat_hash_set<uint16_t>> storage_shards_index_updates_;
 
     struct IndexData {
         uint16_t   engine_id;

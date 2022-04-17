@@ -398,6 +398,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
         {
             auto locked_index = index_ptr.Lock();
             locked_index->ProvideIndexData(index_data_proto);
+            locked_index->AdvanceIndexProgress();
             locked_index->PollQueryResults(&query_results);
         }
     }
@@ -440,6 +441,8 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 LogCachePutAuxData(seqnum, aux_data);
             }
         } else if (result == SharedLogResultType::EMPTY) {
+            HLOG_F(INFO, "Receive EMPTY response for read request: seqnum={}, tag={}",
+                   bits::HexStr0x(op->seqnum), op->query_tag);
             FinishLocalOpWithFailure(
                 op, SharedLogResultType::EMPTY, message.user_metalog_progress);
         } else if (result == SharedLogResultType::DATA_LOST) {

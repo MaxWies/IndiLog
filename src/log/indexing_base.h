@@ -53,7 +53,7 @@ protected:
     struct IndexReadOp {
         uint64_t id;
         int64_t start_timestamp;
-        size_t merged_counter;
+        absl::flat_hash_set<uint16_t> merged_nodes; //todo: merged shard less error prone
         IndexQueryResult index_query_result; // stores the current result
     };
 

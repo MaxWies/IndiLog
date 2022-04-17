@@ -121,7 +121,7 @@ message LogEntryProto {
 message IndexDataProto {
     uint32 logspace_id  = 1;
 
-    uint32 metalog_position = 2;
+    repeated uint32 metalog_positions = 2;
     uint32 next_seqnum = 3;
 
     repeated uint32 user_logspaces = 4; //is always sent
@@ -135,8 +135,9 @@ message IndexDataProto {
 }
 
 message IndexResultProto {
-    bool found = 1;
-    uint32 view_id = 2;
-    uint32 location_identifier = 3;
-    uint64 seqnum = 4;
+    uint32 original_requester_id = 1;
+    bool found = 2;
+    uint32 view_id = 3;
+    uint32 location_identifier = 4;
+    uint64 seqnum = 5;
 }

@@ -106,6 +106,7 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
 namespace {
 static inline std::string SerializedIndexResult(const IndexQueryResult& result) {
     IndexResultProto index_result_proto;
+    index_result_proto.set_original_requester_id(result.original_query.origin_node_id);
     if (result.state == IndexQueryResult::kEmpty){
         index_result_proto.set_found(false);
         index_result_proto.set_view_id(result.next_view_id); // TODO
@@ -143,7 +144,7 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
         protocol::ConnType::INDEX_TO_INDEX,
         master_node_id, response, payload);
     if (!success) {
-        HLOG_F(WARNING, "Failed to send index result to master index {}", master_node_id);
+        HLOG_F(WARNING, "IndexRead: Failed to send index result to master index {}", master_node_id);
     }
 }
 
@@ -166,7 +167,7 @@ void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
         protocol::ConnType::INDEX_TO_ENGINE,
         engine_id, response, payload);
     if (!success) {
-        HLOG_F(WARNING, "Failed to send index read response to engine {}", engine_id);
+        HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_id);
     }
 }
 
@@ -181,13 +182,14 @@ void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::
         protocol::ConnType::INDEX_TO_ENGINE,
         engine_id, response);
     if (!success) {
-        HLOG_F(WARNING, "Failed to send index read failure response to engine {}", engine_id);
+        HLOG_F(WARNING, "IndexRead: Failed to send index read failure response to engine={}", engine_id);
     }
+    HVLOG_F(1, "IndexRead: Sent index read failure response to engine={}", engine_id);
 }
 
 bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
                                         const View::Engine* engine_node) {
-    HVLOG_F(1, "Send StorageReadRequest for seqnum={}", bits::HexStr0x(result.found_result.seqnum));
+    HVLOG_F(1, "IndexRead: Send StorageReadRequest for seqnum={}", bits::HexStr0x(result.found_result.seqnum));
     static constexpr int kMaxRetries = 3;
     DCHECK(result.state == IndexQueryResult::kFound);
 
@@ -200,6 +202,7 @@ bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
     request.client_data = result.original_query.client_data;
     for (int i = 0; i < kMaxRetries; i++) {
         uint16_t storage_id = engine_node->PickStorageNode();
+        HVLOG_F(1, "IndexRead: Forward read request on behalf of engine_node={} to storage_node={}", request.origin_node_id, storage_id);
         bool success = SendSharedLogMessage(
             protocol::ConnType::INDEX_TO_STORAGE, storage_id, request);
         if (success) {
