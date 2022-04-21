@@ -17,6 +17,7 @@ private:
 
     absl::Mutex view_mu_;
     const View* current_view_          ABSL_GUARDED_BY(view_mu_);
+    ViewMutable view_mutable_          ABSL_GUARDED_BY(view_mu_);
     LockablePtr<MetaLogPrimary>
         current_primary_               ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<MetaLogPrimary>
@@ -36,6 +37,7 @@ private:
                              std::span<const char> payload) override;
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;
+    void OnRecvRegistration(const protocol::SharedLogMessage& message) override;
 
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 

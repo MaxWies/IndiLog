@@ -41,7 +41,7 @@ protected:
     enum State { kCreated, kNormal, kFrozen, kFinalized };
 
     LogSpaceBase(Mode mode, const View* view, uint16_t sequencer_id);
-    void AddInterestedShard(uint16_t engine_id);
+    void AddInterestedShard(uint16_t shard_id);
 
     using OffsetVec = absl::FixedArray<uint32_t>;
     virtual void OnNewLogs(uint32_t metalog_seqnum,
@@ -51,26 +51,30 @@ protected:
                         uint32_t user_logspace, uint64_t user_tag,
                         uint64_t trim_seqnum) {}
     virtual void OnMetaLogApplied(const MetaLogProto& meta_log_proto) {}
-    virtual void OnFinalized(uint32_t metalog_position) {} 
+    virtual void OnFinalized(uint32_t metalog_position) {}
 
     Mode mode_;
     State state_;
     const View* view_;
     const View::Sequencer* sequencer_node_;
+    std::vector<uint16_t> active_storage_shard_ids_;
     uint32_t metalog_position_;
     std::string log_header_;
 
 private:
-    absl::flat_hash_set<size_t> interested_shards_;
-    absl::FixedArray<uint32_t> shard_progrsses_;
+    absl::flat_hash_set<size_t> interested_shards_;   
+    absl::flat_hash_map<uint16_t, uint32_t> shard_progresses_;
     uint32_t seqnum_position_;
 
     utils::ProtobufMessagePool<MetaLogProto> metalog_pool_;
     std::vector<MetaLogProto*> applied_metalogs_;
     std::map</* metalog_seqnum */ uint32_t, MetaLogProto*> pending_metalogs_;
 
+    bool first_metalog_; //TODO: in fact only for local indexes allowed
+
     void AdvanceMetaLogProgress();
     bool CanApplyMetaLog(const MetaLogProto& meta_log);
+    void ConsiderStorageShardChange(const MetaLogProto& meta_log);
     void ApplyMetaLog(const MetaLogProto& meta_log);
 
     DISALLOW_COPY_AND_ASSIGN(LogSpaceBase);

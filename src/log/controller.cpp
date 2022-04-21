@@ -60,6 +60,8 @@ void Controller::InstallNewView(const ViewProto& view_proto) {
               next_view_id());
     View* view = new View(view_proto);
     views_.emplace_back(view);
+    ViewMutable* view_mutable = new ViewMutable(); //TODO
+    view_mutable_ = view_mutable;
     std::string serialized;
     CHECK(view_proto.SerializeToString(&serialized));
     zk_session_.Create(
@@ -81,11 +83,6 @@ void Controller::ReconfigView(const Configuration& configuration) {
         HLOG(ERROR) << "Sequencer nodes not enough";
         return;
     }
-    // TODO: will be removed
-    // if (configuration.engine_nodes.size() < index_replicas_) {
-    //     HLOG(ERROR) << "Engine nodes not enough";
-    //     return;
-    // }
     if (configuration.storage_nodes.size() < userlog_replicas_) {
         HLOG(ERROR) << "Storage nodes not enough";
         return;
@@ -119,7 +116,7 @@ void Controller::ReconfigView(const Configuration& configuration) {
         view_proto.add_sequencer_nodes(node_id);
     }
     for (uint16_t node_id : configuration.engine_nodes) {
-        view_proto.add_engine_nodes(node_id);
+        view_proto.add_storage_shard_ids(node_id);
     }
     for (uint16_t node_id : configuration.storage_nodes) {
         view_proto.add_storage_nodes(node_id);
@@ -141,10 +138,7 @@ void Controller::ReconfigView(const Configuration& configuration) {
     for (size_t i = 0; i < num_engines * userlog_replicas_; i++) {
         view_proto.add_storage_plan(configuration.storage_nodes.at(i % num_storages));
     }
-    // TODO: will be removed
-    // for (size_t i = 0; i < num_sequencers * index_replicas_; i++) {
-    //     view_proto.add_index_plan(configuration.engine_nodes.at(i % num_engines));
-    // }
+
     // Index tier plan
     for (size_t i = 0; i < index_shards_; i++) {
         for (size_t j = 0; j < index_replicas_; j++) {
@@ -342,15 +336,16 @@ void Controller::InfoCommandHandler() {
         stream << "  MetaLogReplica = " << view->metalog_replicas() << "\n";
         stream << "  UserLogReplica = " << view->userlog_replicas() << "\n";
         stream << "  IndexReplica = " << view->index_replicas() << "\n";
+        stream << "  IndexShards = " << view->num_index_shards() << "\n";
         stream << "  NumPhyLogs = " << view->num_phylogs() << "\n";
         stream << "  Sequencers = [";
         for (uint16_t sequencer_id : view->GetSequencerNodes()) {
             stream << sequencer_id << ", ";
         }
         stream << "]\n";
-        stream << "  Engines = [";
-        for (uint16_t engine_id : view->GetEngineNodes()) {
-            stream << engine_id << ", ";
+        stream << "  StorageShards = [";
+        for (uint32_t storage_shard_id : view->GetGlobalStorageShardIds()) {
+            stream << storage_shard_id << ", ";
         }
         stream << "]\n";
         stream << "  Storages = [";
@@ -397,8 +392,8 @@ void Controller::ReconfigCommandHandler(std::string inputs) {
                  configuration.sequencer_nodes.end(),
                  rnd_gen_);
     configuration.engine_nodes.assign(
-        view->GetEngineNodes().begin(),
-        view->GetEngineNodes().end());
+        view->GetLocalStorageShardIds().begin(),
+        view->GetLocalStorageShardIds().end());
     std::shuffle(configuration.engine_nodes.begin(),
                  configuration.engine_nodes.end(),
                  rnd_gen_);

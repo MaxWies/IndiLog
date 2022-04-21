@@ -9,6 +9,7 @@ namespace log {
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
+using protocol::SharedLogResultType;
 
 Sequencer::Sequencer(uint16_t node_id)
     : SequencerBase(node_id),
@@ -181,14 +182,18 @@ void Sequencer::HandleTrimRequest(const SharedLogMessage& request) {
 }
 
 void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
+    // backups to primary sequencer
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::META_PROG);
     const View* view = nullptr;
+    const ViewMutable* view_mutable = nullptr;
     absl::InlinedVector<MetaLogProto, 4> replicated_metalogs;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         PANIC_IF_FROM_FUTURE_VIEW(message);  // I believe this will never happen
         IGNORE_IF_FROM_PAST_VIEW(message);
         view = current_view_;
+        view_mutable = &view_mutable_;
+
         auto logspace_ptr = primary_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_logspace = logspace_ptr.Lock();
@@ -197,6 +202,8 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             locked_logspace->UpdateReplicaProgress(
                 message.origin_node_id, message.metalog_position);
             uint32_t new_position = locked_logspace->replicated_metalog_position();
+            HVLOG_F(1, "Get metalog progress from sequencer={}. old_position={}, new_position={}",
+                message.origin_node_id, old_position, new_position);
             for (uint32_t pos = old_position; pos < new_position; pos++) {
                 if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
                     replicated_metalogs.push_back(std::move(*metalog));
@@ -207,7 +214,8 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
         }
     }
     for (const MetaLogProto& metalog_proto : replicated_metalogs) {
-        PropagateMetaLog(DCHECK_NOTNULL(view), metalog_proto);
+        HVLOG(1) << "Propagate meta log";
+        PropagateMetaLog(DCHECK_NOTNULL(view), DCHECK_NOTNULL(view_mutable), metalog_proto);
     }
 }
 
@@ -231,6 +239,7 @@ void Sequencer::OnRecvShardProgress(const SharedLogMessage& message,
 
 void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                   std::span<const char> payload) {
+    // from primary to backups
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
     uint32_t logspace_id = message.logspace_id;
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
@@ -253,10 +262,92 @@ void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
         }
     }
     if (new_metalog_position > old_metalog_position) {
+        HVLOG(1) << "Metalog position increases";
         SharedLogMessage response = SharedLogMessageHelper::NewMetaLogProgressMessage(
             logspace_id, new_metalog_position);
         SendSequencerMessage(message.sequencer_id, &response);
+    } else {
+        HVLOG(1) << "Metalog position did not increase";
     }
+}
+
+void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
+    DCHECK(SharedLogMessageHelper::GetOpType(received_message) == SharedLogOpType::REGISTER);
+    SharedLogResultType result = SharedLogMessageHelper::GetResultType(received_message);
+    DCHECK(result == SharedLogResultType::REGISTER_ENGINE 
+        || result == SharedLogResultType::REGISTER_UNBLOCK);
+    absl::MutexLock view_lk(&view_mu_);
+
+    bool registration_failed = false;
+    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.shard_id)){
+        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.shard_id);
+        registration_failed = true;
+    }
+    if(received_message.view_id != current_view_->id()){
+        HLOG_F(WARNING, "Current view not the same. register_view={}, my_current_view={}", received_message.view_id, current_view_->id());
+        registration_failed = true;
+    }
+    if(received_message.sequencer_id != my_node_id()){
+        HLOG_F(ERROR, "I am not primary. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}",
+            my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id);
+        registration_failed = true;
+    }
+    if (registration_failed){
+        SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+            SharedLogResultType::REGISTER_SEQUENCER_FAILED,
+            current_view_->id(),
+            received_message.sequencer_id,
+            received_message.shard_id,
+            received_message.engine_node_id,
+            0
+        );
+        SendRegistrationResponse(received_message, protocol::ConnType::SEQUENCER_TO_ENGINE, &response);
+        return;
+    }
+
+    // sequencer is primary
+    uint32_t logspace_id = received_message.logspace_id;
+    uint32_t local_start_id;
+    SharedLogResultType type;
+    DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id());
+    bool registration_ok;
+    if (result == SharedLogResultType::REGISTER_ENGINE){
+        auto logspace_ptr = primary_collection_.GetLogSpaceChecked(logspace_id);
+        {
+            auto locked_logspace = logspace_ptr.Lock();
+            RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+            registration_ok = locked_logspace->BlockShard(received_message.shard_id, &local_start_id);
+        }
+        type = SharedLogResultType::REGISTER_SEQUENCER_OK;
+    } else if (result == SharedLogResultType::REGISTER_UNBLOCK){
+        auto logspace_ptr = primary_collection_.GetLogSpaceChecked(logspace_id);
+        {
+            auto locked_logspace = logspace_ptr.Lock();
+            RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
+            registration_ok = locked_logspace->UnblockShard(received_message.shard_id, &local_start_id);
+        }
+        view_mutable_.PutStorageShardOccupation(
+            bits::JoinTwo16(my_node_id(), received_message.shard_id), received_message.engine_node_id);
+        type = SharedLogResultType::REGISTER_UNBLOCK;
+    } else {
+        UNREACHABLE();
+    }
+    if(!registration_ok){
+        type = SharedLogResultType::REGISTER_SEQUENCER_FAILED;
+    }
+    SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+        type,
+        received_message.view_id,
+        received_message.sequencer_id,
+        received_message.engine_node_id,
+        received_message.shard_id,
+        local_start_id
+    );
+    if(registration_ok){
+        HLOG_F(INFO, "Registration ok, send response. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}, local_start_id={}",
+        my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id, bits::HexStr0x(local_start_id));
+    }
+    SendRegistrationResponse(received_message, protocol::ConnType::SEQUENCER_TO_ENGINE, &response);
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW

@@ -28,6 +28,7 @@ protected:
                                      std::span<const char> payload) = 0;
     virtual void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                                    std::span<const char> payload) = 0;
+    virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
 
     virtual void MarkNextCutIfDoable() = 0;
 
@@ -35,7 +36,7 @@ protected:
                         std::span<const char> payload);
 
     void ReplicateMetaLog(const View* view, const MetaLogProto& metalog);
-    void PropagateMetaLog(const View* view, const MetaLogProto& metalog);
+    void PropagateMetaLog(const View* view, const ViewMutable* view_mutable, const MetaLogProto& metalog);
 
     bool SendSequencerMessage(uint16_t sequencer_id,
                               protocol::SharedLogMessage* message,
@@ -43,6 +44,7 @@ protected:
     bool SendEngineResponse(const protocol::SharedLogMessage& request,
                             protocol::SharedLogMessage* response,
                             std::span<const char> payload = EMPTY_CHAR_SPAN);
+    bool SendRegistrationResponse(const protocol::SharedLogMessage& request, protocol::ConnType connection_type, protocol::SharedLogMessage* response);
 
 private:
     const uint16_t node_id_;
@@ -70,7 +72,7 @@ private:
                                 std::span<const char> payload);
     bool SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
                               const protocol::SharedLogMessage& message,
-                              std::span<const char> payload);
+                              std::span<const char> payload = EMPTY_CHAR_SPAN);
 
     server::EgressHub* CreateEgressHub(protocol::ConnType conn_type,
                                        uint16_t dst_node_id,

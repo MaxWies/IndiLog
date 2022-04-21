@@ -101,7 +101,8 @@ enum class SharedLogOpType : uint16_t {
     READ_NEXT_INDEX_RESULT = 0x16, // IndexNode to IndexNode, IndexNode to Engine
     READ_PREV_INDEX_RESULT = 0x17, // IndexNode to IndexNode, IndexNode to Engine
     READ_NEXT_B_INDEX_RESULT = 0x18, // IndexNode to IndexNode, IndexNode to Engine
-    RESPONSE    = 0x20
+    RESPONSE    = 0x20,
+    REGISTER    = 0x40 // Engine to Storage, Engine to Sequencer, Sequencer to Sequencer
 };
 
 enum class SharedLogResultType : uint16_t {
@@ -117,7 +118,14 @@ enum class SharedLogResultType : uint16_t {
     DISCARDED   = 0x31,  // Log to append is discarded
     EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
     DATA_LOST   = 0x33,  // Failed to extract log data
-    TRIM_FAILED = 0x34
+    TRIM_FAILED = 0x34,
+    // Registration
+    REGISTER_ENGINE = 0x41,
+    REGISTER_STORAGE_OK = 0x42,
+    REGISTER_STORAGE_FAILED = 0x43,
+    REGISTER_SEQUENCER_OK = 0x44,
+    REGISTER_SEQUENCER_FAILED = 0x45,
+    REGISTER_UNBLOCK = 0x46,
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -256,18 +264,23 @@ struct SharedLogMessage {
     union {
         uint32_t metalog_position; // [16:20] (only used by META_PROG)
         uint32_t user_logspace;    // [16:20]
+        struct {
+            uint16_t shard_id; // [16:20] (only used by REGISTRATION)
+            uint16_t engine_node_id;
+        } __attribute__ ((packed));
     };
 
     union {
         uint32_t seqnum_lowhalf;  // [20:24] (the high half is logspace_id)
         struct {
             uint16_t prev_view_id;
-            uint16_t prev_engine_id;
+            uint16_t prev_shard_id;
         } __attribute__ ((packed));
         struct {
             uint16_t use_master_node_id;
             uint16_t master_node_id; // (only used for index tier)
         } __attribute__ ((packed));
+        uint32_t local_start_id;   // only used by storage nodes in registration
     };
     union {
         uint64_t query_tag;   // [24:32]
@@ -630,6 +643,29 @@ public:
         message.op_type = static_cast<uint16_t>(SharedLogOpType::READ_AT);
         message.logspace_id = logspace_id;
         message.seqnum_lowhalf = seqnum_lowhalf;
+        return message;
+    }
+
+    static SharedLogMessage NewRegisterMessage(uint16_t view_id, uint16_t sequencer_id, uint16_t shard_id, uint16_t engine_id) {
+        NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+        message.op_type = static_cast<uint16_t>(SharedLogOpType::REGISTER);
+        message.op_result = static_cast<uint16_t>(SharedLogResultType::REGISTER_ENGINE);
+        message.view_id = view_id;
+        message.sequencer_id = sequencer_id;
+        message.shard_id = shard_id;
+        message.engine_node_id = engine_id;
+        return message;
+    }
+
+    static SharedLogMessage NewRegisterResponseMessage(SharedLogResultType result, uint16_t view_id, uint16_t sequencer_id, uint16_t shard_id, uint16_t engine_id, uint32_t local_start_id) {
+        NEW_EMPTY_SHAREDLOG_MESSAGE(message);
+        message.op_type = static_cast<uint16_t>(SharedLogOpType::REGISTER);
+        message.op_result = static_cast<uint16_t>(result);
+        message.view_id = view_id;
+        message.sequencer_id = sequencer_id;
+        message.shard_id = shard_id;
+        message.engine_node_id = engine_id;
+        message.local_start_id = local_start_id;
         return message;
     }
 

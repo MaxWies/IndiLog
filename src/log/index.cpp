@@ -47,6 +47,11 @@ protocol::SharedLogOpType IndexQuery::DirectionToIndexResult() const {
     }
 }
 
+uint32_t IndexQueryResult::StorageShardId() const {
+    CHECK_EQ(state, State::kFound);
+    return bits::JoinTwo16(bits::LowHalf32(bits::HighHalf64(found_result.seqnum)), found_result.storage_shard_id);
+}
+
 Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
@@ -54,7 +59,7 @@ Index::Index(const View* view, uint16_t sequencer_id)
       indexed_seqnum_position_(0) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
-    number_storage_shards_ = view->num_engine_nodes(); //Todo: dirty
+    number_storage_shards_ = view->num_local_storage_shards();
 }
 
 Index::~Index() {}
@@ -511,7 +516,7 @@ void Index::ProcessReadNext(const IndexQuery& query) {
                 const IndexFoundResult& found_result = query.prev_found_result;
                 pending_query_results_.push_back(
                     BuildFoundResult(query, found_result.view_id,
-                                     found_result.seqnum, found_result.engine_id));
+                                     found_result.seqnum, found_result.storage_shard_id));
                 HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult (from prev_result): seqnum={}",
                         found_result.seqnum);
             } else {
@@ -595,7 +600,7 @@ bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* e
 }
 
 IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
-                                         uint64_t seqnum, uint16_t engine_id) {
+                                         uint64_t seqnum, uint16_t storage_shard_id) {
     return IndexQueryResult {
         .state = IndexQueryResult::kFound,
         .metalog_progress = query.initial ? index_metalog_progress()
@@ -604,7 +609,7 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
         .original_query = query,
         .found_result = IndexFoundResult {
             .view_id = view_id,
-            .engine_id = engine_id,
+            .storage_shard_id = storage_shard_id,
             .seqnum = seqnum
         }
     };
@@ -619,14 +624,14 @@ IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
         .original_query = query,
         .found_result = IndexFoundResult {
             .view_id = 0,
-            .engine_id = 0,
+            .storage_shard_id = 0,
             .seqnum = kInvalidLogSeqNum
         }
     };
 }
 
 IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
-                                            uint64_t seqnum, uint16_t engine_id) {
+                                            uint64_t seqnum, uint16_t storage_shard_id) {
     DCHECK(view_->id() > 0);
     IndexQueryResult result = {
         .state = IndexQueryResult::kContinue,
@@ -636,7 +641,7 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
         .original_query = query,
         .found_result = IndexFoundResult {
             .view_id = 0,
-            .engine_id = 0,
+            .storage_shard_id = 0,
             .seqnum = kInvalidLogSeqNum
         }
     };
@@ -649,7 +654,7 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
     if (found) {
         result.found_result = IndexFoundResult {
             .view_id = view_->id(),
-            .engine_id = engine_id,
+            .storage_shard_id = storage_shard_id,
             .seqnum = seqnum
         };
     } else if (!query.initial && query.prev_found_result.seqnum != kInvalidLogSeqNum) {

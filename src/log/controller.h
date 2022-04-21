@@ -56,6 +56,7 @@ private:
     std::set</* node_id */ uint16_t> index_nodes_;
 
     std::vector<std::unique_ptr<View>> views_;
+    ViewMutable* view_mutable_;
 
     using NodeIdVec = std::vector<uint16_t>;
     struct Configuration {
@@ -89,6 +90,10 @@ private:
     void InstallNewView(const ViewProto& view_proto);
     void ReconfigView(const Configuration& configuration);
     void FreezeView(const View* view);
+
+    void CreateStorageShardZNodes(const Configuration& configuration);
+    void ResetStorageShardOccupation(const Configuration& configuration);
+    void OnStorageShardRequest(uint16_t node_id);
 
     std::optional<FinalizedViewProto> CheckAllSealed(const OngoingSeal& seal);
 

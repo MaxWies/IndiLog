@@ -39,7 +39,7 @@ message ViewProto {
     // This design helps achieving local ordering.
     // Log data of each shard replicates on `userlog_replicas` storage nodes.
     // One log shard can be uniquely identified as (view_id, sequencer_id, engine_id)
-    repeated uint32 engine_nodes = 9;
+    repeated uint32 storage_shard_ids = 9;
 
     // [Log Index]
     // Each physical log space has `index_replicas` indices, stored on engine nodes.
@@ -64,26 +64,29 @@ message MetaLogProto {
     uint32 logspace_id    = 1;
     uint32 metalog_seqnum = 2;
 
+    bool storage_shard_change = 3;
+    repeated uint32 storage_shard_ids = 4; //sorted ascending
+
     enum Type {
         INVALID  = 0;
         NEW_LOGS = 1;
         TRIM     = 2;
     }
-    Type type = 4;
+    Type type = 5;
 
     message NewLogsProto {
         uint32          start_seqnum = 1;
         repeated uint32 shard_starts = 2;
         repeated uint32 shard_deltas = 3;
     }
-    NewLogsProto new_logs_proto = 5;
+    NewLogsProto new_logs_proto = 6;
 
     message TrimProto {
         uint32 user_logspace = 1;
         uint64 user_tag      = 2;
         uint64 trim_seqnum   = 3;
     }
-    TrimProto trim_proto = 6;
+    TrimProto trim_proto = 7;
 }
 
 message MetaLogsProto {

@@ -7,7 +7,7 @@ namespace log {
 
 struct IndexFoundResult {
     uint16_t view_id;
-    uint16_t engine_id;
+    uint16_t storage_shard_id;
     uint64_t seqnum;
 };
 
@@ -41,6 +41,8 @@ struct IndexQueryResult {
 
     IndexQuery       original_query;
     IndexFoundResult found_result;
+
+    uint32_t StorageShardId() const;
 };
 
 class Index final : public LogSpaceBase {

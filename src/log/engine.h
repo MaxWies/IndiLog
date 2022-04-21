@@ -21,7 +21,8 @@ private:
     std::string log_header_;
 
     absl::Mutex view_mu_;
-    const View* current_view_        ABSL_GUARDED_BY(view_mu_);
+    const View* current_view_          ABSL_GUARDED_BY(view_mu_);
+    ViewMutable view_mutable_       ABSL_GUARDED_BY(view_mu_);
     bool current_view_active_        ABSL_GUARDED_BY(view_mu_);
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<LogProducer>
@@ -48,6 +49,7 @@ private:
                             std::span<const char> payload) override;
     void OnRecvResponse(const protocol::SharedLogMessage& message,
                         std::span<const char> payload) override;
+    void OnRecvRegistrationResponse(const protocol::SharedLogMessage& message) override;
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);

@@ -64,16 +64,16 @@ void IndexNode::OnViewCreated(const View* view) {
     }
 }
 
-void IndexNode::OnViewFrozen(const View* view) {
-    DCHECK(zk_session()->WithinMyEventLoopThread());
-    HLOG_F(INFO, "View {} frozen", view->id());
-    absl::MutexLock view_lk(&view_mu_);
-    DCHECK_EQ(view->id(), current_view_->id());
-    if (view->contains_engine_node(my_node_id())) {
-        DCHECK(current_view_active_);
-        current_view_active_ = false;
-    }
-}
+// void IndexNode::OnViewFrozen(const View* view) {
+//     DCHECK(zk_session()->WithinMyEventLoopThread());
+//     HLOG_F(INFO, "View {} frozen", view->id());
+//     absl::MutexLock view_lk(&view_mu_);
+//     DCHECK_EQ(view->id(), current_view_->id());
+//     if (view->contains_engine_node(my_node_id())) {
+//         DCHECK(current_view_active_);
+//         current_view_active_ = false;
+//     }
+// }
 
 void IndexNode::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
@@ -190,7 +190,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
         }
         //TODO: is index check
         const View::Storage* storage_node = view->GetStorageNode(message.origin_node_id);
-        View::NodeIdVec storage_shards = storage_node->GetSourceEngineNodes();
+        View::NodeIdVec storage_shards = storage_node->GetLocalStorageShardIds(message.sequencer_id);
 
         auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
         {
@@ -375,19 +375,18 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
 
 void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     DCHECK(query_result.state == IndexQueryResult::kFound);
-    const View::Engine* engine_node = nullptr;
+    const View::StorageShard* storage_shard = nullptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         uint16_t view_id = query_result.found_result.view_id;
         if (view_id < views_.size()) {
             const View* view = views_.at(view_id);
-            uint16_t origin_node_id = query_result.original_query.origin_node_id;
-            engine_node = view->GetEngineNode(origin_node_id);
+            storage_shard = view->GetStorageShard(query_result.StorageShardId());
         } else {
             HLOG_F(FATAL, "IndexRead: Cannot find view {}", view_id);
         }
     }
-    bool success = SendStorageReadRequest(query_result, engine_node);
+    bool success = SendStorageReadRequest(query_result, storage_shard);
     if (!success) {
         uint64_t seqnum = query_result.found_result.seqnum;
         IndexQuery query = query_result.original_query;
@@ -441,7 +440,7 @@ SharedLogMessage IndexNode::BuildReadRequestMessage(const IndexQueryResult& resu
     request.query_seqnum = query.query_seqnum;
     request.user_metalog_progress = result.metalog_progress;
     request.prev_view_id = result.found_result.view_id;
-    request.prev_engine_id = result.found_result.engine_id;
+    request.prev_shard_id = result.found_result.storage_shard_id;
     request.prev_found_seqnum = result.found_result.seqnum;
     return request;
 }
@@ -461,7 +460,7 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
         .master_node_id = message.master_node_id,
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
-            .engine_id = message.prev_engine_id,
+            .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
         },
     };
@@ -469,13 +468,13 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
         index_query.master_node_id = message.master_node_id;
         index_query.prev_found_result = IndexFoundResult {
             .view_id = 0,
-            .engine_id = 0,
+            .storage_shard_id = 0,
             .seqnum = message.prev_found_seqnum
         };
     } else {
         index_query.prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
-            .engine_id = message.prev_engine_id,
+            .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
         };
     }
@@ -527,7 +526,7 @@ IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message,
         .original_query = query,
         .found_result = IndexFoundResult {
             .view_id = gsl::narrow_cast<uint16_t>(result.view_id()),
-            .engine_id = gsl::narrow_cast<uint16_t>(result.location_identifier()),
+            .storage_shard_id = gsl::narrow_cast<uint16_t>(result.location_identifier()),
             .seqnum = result.seqnum()
         }
     };

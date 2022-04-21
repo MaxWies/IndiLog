@@ -141,6 +141,9 @@ void EngineBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::RESPONSE:
         OnRecvResponse(message, payload);
         break;
+    case SharedLogOpType::REGISTER:
+        OnRecvRegistrationResponse(message);
+        break;
     default:
         UNREACHABLE();
     }
@@ -225,7 +228,7 @@ void EngineBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
     MessageHandler(message, payload);
 }
 
-void EngineBase::ReplicateLogEntry(const View* view, const LogMetaData& log_metadata,
+void EngineBase::ReplicateLogEntry(const View* view, const View::StorageShard* storage_shard, const LogMetaData& log_metadata,
                                    std::span<const uint64_t> user_tags,
                                    std::span<const char> log_data) {
     SharedLogMessage message = SharedLogMessageHelper::NewReplicateMessage();
@@ -233,25 +236,20 @@ void EngineBase::ReplicateLogEntry(const View* view, const LogMetaData& log_meta
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(
         user_tags.size() * sizeof(uint64_t) + log_data.size());
-    const View::Engine* engine_node = view->GetEngineNode(node_id_);
-    for (uint16_t storage_id : engine_node->GetStorageNodes()) {
+    for (uint16_t storage_id : storage_shard->GetStorageNodes()) {
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
                                       storage_id, message,
                                       VECTOR_AS_CHAR_SPAN(user_tags), log_data);
     }
 }
 
-void EngineBase::PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
+void EngineBase::PropagateAuxData(const View* view, const View::StorageShard* storage_shard, const LogMetaData& log_metadata, 
                                   std::span<const char> aux_data) {
-    uint16_t engine_id = gsl::narrow_cast<uint16_t>(
-        bits::HighHalf64(log_metadata.localid));
-    DCHECK(view->contains_engine_node(engine_id));
-    const View::Engine* engine_node = view->GetEngineNode(engine_id);
     SharedLogMessage message = SharedLogMessageHelper::NewSetAuxDataMessage(
         log_metadata.seqnum);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(aux_data.size());
-    for (uint16_t storage_id : engine_node->GetStorageNodes()) {
+    for (uint16_t storage_id : storage_shard->GetStorageNodes()) {
         engine_->SendSharedLogMessage(protocol::ConnType::ENGINE_TO_STORAGE,
                                       storage_id, message, aux_data);
     }
@@ -306,21 +304,21 @@ std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t seqnum) {
 // this is outdated
 bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
                                       SharedLogMessage* request) {
-    static constexpr int kMaxRetries = 3;
+    // static constexpr int kMaxRetries = 3;
 
-    request->sequencer_id = sequencer_node->node_id();
-    request->view_id = sequencer_node->view()->id();
-    for (int i = 0; i < kMaxRetries; i++) {
-        uint16_t engine_id = sequencer_node->PickIndexEngineNode();
-        if (engine_id == node_id_) {
-            continue;
-        }
-        bool success = engine_->SendSharedLogMessage(
-            protocol::ConnType::SLOG_ENGINE_TO_ENGINE, engine_id, *request);
-        if (success) {
-            return true;
-        }
-    }
+    // request->sequencer_id = sequencer_node->node_id();
+    // request->view_id = sequencer_node->view()->id();
+    // for (int i = 0; i < kMaxRetries; i++) {
+    //     uint16_t engine_id = sequencer_node->PickIndexEngineNode();
+    //     if (engine_id == node_id_) {
+    //         continue;
+    //     }
+    //     bool success = engine_->SendSharedLogMessage(
+    //         protocol::ConnType::SLOG_ENGINE_TO_ENGINE, engine_id, *request);
+    //     if (success) {
+    //         return true;
+    //     }
+    // }
     return false;
 }
 
@@ -337,7 +335,7 @@ bool EngineBase::SendIndexTierReadRequest(uint16_t index_node_id, SharedLogMessa
 }
 
 bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
-                                        const View::Engine* engine_node) {
+                                        const View::StorageShard* storage_shard) {
     static constexpr int kMaxRetries = 3;
     DCHECK(result.state == IndexQueryResult::kFound);
 
@@ -349,7 +347,7 @@ bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
     request.hop_times = result.original_query.hop_times + 1;
     request.client_data = result.original_query.client_data;
     for (int i = 0; i < kMaxRetries; i++) {
-        uint16_t storage_id = engine_node->PickStorageNode();
+        uint16_t storage_id = storage_shard->PickStorageNode();
         bool success = engine_->SendSharedLogMessage(
             protocol::ConnType::ENGINE_TO_STORAGE, storage_id, request);
         if (success) {
@@ -394,6 +392,19 @@ bool EngineBase::SendSequencerMessage(uint16_t sequencer_id,
     return engine_->SendSharedLogMessage(
         protocol::ConnType::ENGINE_TO_SEQUENCER,
         sequencer_id, *message, payload);
+}
+
+bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::ConnType connection_type, SharedLogMessage* message){
+    static constexpr int kMaxRetries = 3;
+    DCHECK(message->op_type == gsl::narrow_cast<uint16_t>(protocol::SharedLogOpType::REGISTER));
+    message->origin_node_id = node_id_;
+    for (int i = 0; i < kMaxRetries; i++) {
+        bool success = engine_->SendSharedLogMessage(connection_type, destination_id, *message);
+        if (success) {
+            return true;
+        }
+    }
+    return false;
 }
 
 server::IOWorker* EngineBase::SomeIOWorker() {

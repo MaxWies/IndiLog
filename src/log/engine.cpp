@@ -26,43 +26,34 @@ Engine::~Engine() {}
 void Engine::OnViewCreated(const View* view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "New view {} created", view->id());
-    bool contains_myself = view->contains_engine_node(my_node_id());
-    if (!contains_myself) {
-        HLOG_F(WARNING, "View {} does not include myself", view->id());
-    }
-    std::vector<SharedLogRequest> ready_requests;
     {
         absl::MutexLock view_lk(&view_mu_);
-        if (contains_myself) {
-            const View::Engine* engine_node = view->GetEngineNode(my_node_id());
-            for (uint16_t sequencer_id : view->GetSequencerNodes()) {
-                if (!view->is_active_phylog(sequencer_id)) {
-                    continue;
-                }
-                producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(
-                    my_node_id(), view, sequencer_id));
-                if (engine_node->HasIndexFor(sequencer_id)) {
-                    HVLOG_F(1, "Create logspace for view={}, sequencer={}", view->id(), sequencer_id);
-                    index_collection_.InstallLogSpace(std::make_unique<Index>(
-                        view, sequencer_id));
-                }
+        for (uint16_t sequencer_id : view->GetSequencerNodes()) {
+            if (!view->is_active_phylog(sequencer_id)) {
+                continue;
             }
+            HLOG_F(INFO, "Start registration at sequencer_node={}", sequencer_id);
+            view_mutable_.CreateEngineConnection(
+                bits::JoinTwo16(view->id(), sequencer_id), 
+                view->userlog_replicas(), 
+                view->num_local_storage_shards()
+            );
+            //TODO: give engine shard identifier
+            SomeIOWorker()->ScheduleFunction(
+                nullptr, [this, view_id = view->id(), sequencer_id = sequencer_id, shard_id = my_node_id(), engine_id = my_node_id()] () {
+                    SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterMessage(
+                        view_id, 
+                        sequencer_id, 
+                        shard_id,
+                        engine_id
+                    );
+                    SendRegistrationRequest(sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
+                }
+            );
         }
-        future_requests_.OnNewView(view, contains_myself ? &ready_requests : nullptr);
         current_view_ = view;
-        if (contains_myself) {
-            current_view_active_ = true;
-        }
         views_.push_back(view);
         log_header_ = fmt::format("LogEngine[{}-{}]: ", my_node_id(), view->id());
-    }
-    if (!ready_requests.empty()) {
-        HLOG_F(INFO, "{} requests for the new view", ready_requests.size());
-        SomeIOWorker()->ScheduleFunction(
-            nullptr, [this, requests = std::move(ready_requests)] () {
-                ProcessRequests(requests);
-            }
-        );
     }
 }
 
@@ -71,7 +62,9 @@ void Engine::OnViewFrozen(const View* view) {
     HLOG_F(INFO, "View {} frozen", view->id());
     absl::MutexLock view_lk(&view_mu_);
     DCHECK_EQ(view->id(), current_view_->id());
-    if (view->contains_engine_node(my_node_id())) {
+    std::vector<uint16_t> active_sequencer_nodes;
+    view->GetActiveSequencerNodes(&active_sequencer_nodes);
+    if (view_mutable_.IsEngineActive(view->id(), active_sequencer_nodes)) {
         DCHECK(current_view_active_);
         current_view_active_ = false;
     }
@@ -150,6 +143,14 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
 
 // Start handlers for local requests (from functions)
 
+#define IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(LOGSPACE_ID)                       \
+    do {                                                             \
+        if (!view_mutable_.GetMyStorageShards().contains(LOGSPACE_ID)) { \
+            HLOG(INFO) << "No connection to logspace " << LOGSPACE_ID;                  \
+            return;                                                  \
+        }                                                            \
+    } while (0)
+
 #define ONHOLD_IF_SEEN_FUTURE_VIEW(LOCAL_OP_VAR)                          \
     do {                                                                  \
         uint16_t view_id = log_utils::GetViewId(                          \
@@ -166,6 +167,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
     const View* view = nullptr;
+    const View::StorageShard* storage_shard = nullptr;
     LogMetaData log_metadata = MetaDataFromAppendOp(op);
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -176,6 +178,11 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         }
         view = current_view_;
         uint32_t logspace_id = view->LogSpaceIdentifier(op->user_logspace);
+        storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
+        if (storage_shard == nullptr){
+            HLOG_F(WARNING, "No storage shard for logspace={}", logspace_id);
+            return;
+        }
         log_metadata.seqnum = bits::JoinTwo32(logspace_id, 0);
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(logspace_id);
         {
@@ -183,7 +190,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             locked_producer->LocalAppend(op, &log_metadata.localid);
         }
     }
-    ReplicateLogEntry(view, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
+    ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
 }
 
 void Engine::HandleLocalTrim(LocalOp* op) {
@@ -197,17 +204,21 @@ void Engine::HandleLocalRead(LocalOp* op) {
           || op->type == SharedLogOpType::READ_NEXT_B);
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
+    absl::ReaderMutexLock view_lk(&view_mu_);
+    uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
+    if(!view_mutable_.GetMyStorageShards().contains(logspace_id)){
+        FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+    }
     onging_reads_.PutChecked(op->id, op);
+    ONHOLD_IF_SEEN_FUTURE_VIEW(op);
     const View::Sequencer* sequencer_node = nullptr;
     if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
         HVLOG(1) << "Send request to index tier";
-        absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-        const View::Engine* engine_node = current_view_->GetEngineNode(my_node_id());
-        uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
         sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
+        const View::StorageShard* storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
         std::vector<uint16_t> index_nodes;
-        engine_node->PickIndexNodePerShard(index_nodes);
+        storage_shard->PickIndexNodePerShard(index_nodes);
         uint16_t master_index_node = index_nodes.at(0);
         SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
         request.sequencer_id = sequencer_node->node_id();
@@ -228,15 +239,10 @@ void Engine::HandleLocalRead(LocalOp* op) {
         HVLOG_F(1, "Sent request to index tier successully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
         return;
     }
+    //TODO:local indexing
     LockablePtr<Index> index_ptr;
     {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-        uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
-        sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
-        if (sequencer_node->IsIndexEngineNode(my_node_id())) {
-            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
-        }
+        index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
     }
     bool use_local_index = true;
     if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
@@ -286,7 +292,10 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
             absl::ReaderMutexLock view_lk(&view_mu_);
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);
-                PropagateAuxData(view, log_entry->metadata, *aux_data);
+                uint16_t sequencer_id = bits::LowHalf32(bits::HighHalf64(seqnum));
+                uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(log_entry->metadata.localid));
+                const View::StorageShard* storage_shard = view->GetStorageShard(bits::JoinTwo16(sequencer_id, storage_shard_id));
+                PropagateAuxData(view, storage_shard, log_entry->metadata, *aux_data);
             }
         }
     }
@@ -326,6 +335,7 @@ void Engine::HandleRemoteRead(const SharedLogMessage& request) {
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
+        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(request.logspace_id);
         index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
     }
     IndexQuery query = BuildIndexQuery(request);
@@ -349,6 +359,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
+        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
@@ -357,15 +368,14 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
             }
             locked_producer->PollAppendResults(&append_results);
         }
-        if (current_view_->GetEngineNode(my_node_id())->HasIndexFor(message.sequencer_id)) {
-            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
-            {
-                auto locked_index = index_ptr.Lock();
-                for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
-                    locked_index->ProvideMetaLog(metalog_proto);
-                }
-                locked_index->PollQueryResults(&query_results);
+        //TODO: local indexing
+        auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+        {
+            auto locked_index = index_ptr.Lock();
+            for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
+                locked_index->ProvideMetaLog(metalog_proto);
             }
+            locked_index->PollQueryResults(&query_results);
         }
     }
     ProcessAppendResults(append_results);
@@ -384,16 +394,9 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
+        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
         DCHECK(message.view_id < views_.size());
-        const View* view = views_.at(message.view_id);
-        if (!view->contains_engine_node(my_node_id())) {
-            HLOG_F(FATAL, "View {} does not contain myself", view->id());
-        }
-        const View::Engine* engine_node = view->GetEngineNode(my_node_id());
-        if (!engine_node->HasIndexFor(message.sequencer_id)) {
-            HLOG_F(FATAL, "This node is not index node for log space {}",
-                   bits::HexStr0x(message.logspace_id));
-        }
+        //Todo: local index takes only what it wants
         auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_index = index_ptr.Lock();
@@ -407,6 +410,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
+#undef IGNORE_IF_NO_CONNECTION_TO_LOGSPACE
 
 void Engine::OnRecvResponse(const SharedLogMessage& message,
                             std::span<const char> payload) {
@@ -454,6 +458,91 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         }
     } else {
         HLOG(FATAL) << "Unknown result type: " << message.op_result;
+    }
+}
+
+void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& received_message){
+    SharedLogResultType result = SharedLogMessageHelper::GetResultType(received_message);
+    DCHECK_EQ(my_node_id(), received_message.engine_node_id);
+    absl::MutexLock view_lk(&view_mu_);
+    if(result == protocol::SharedLogResultType::REGISTER_STORAGE_FAILED){
+        HLOG_F(ERROR, "Registration at storage_node={} failed. registration_view={}, response_view={}", 
+            received_message.origin_node_id, current_view_->id(), received_message.view_id);
+        return;
+    }
+    if(result == protocol::SharedLogResultType::REGISTER_SEQUENCER_FAILED){
+        HLOG_F(ERROR, "Registration at sequencer_node={} failed. registration_view={}, response_view={}", 
+            received_message.origin_node_id, current_view_->id(), received_message.view_id);
+        return;
+    }
+    if(current_view_->id() != received_message.view_id){
+        HLOG_F(WARNING, "View has changed. registration_view={}, response_view={}", current_view_->id(), received_message.view_id);
+        return;
+    }
+    if (!current_view_->is_active_phylog(received_message.sequencer_id)) {
+        HLOG_F(ERROR, "Sequencer_node={} is not active anymore", received_message.sequencer_id);
+        return;
+    }
+    uint32_t logspace_id = bits::JoinTwo16(received_message.view_id, received_message.sequencer_id);
+    if (result == protocol::SharedLogResultType::REGISTER_SEQUENCER_OK){
+        DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
+        HLOG_F(INFO, "Registered at sequencer_noded={} with shard_id={}", 
+            received_message.origin_node_id, received_message.shard_id);
+        if(view_mutable_.UpdateSequencerConnection(logspace_id, received_message.origin_node_id, received_message.local_start_id)){
+            SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(SharedLogResultType::REGISTER_ENGINE,
+                current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id, received_message.local_start_id
+            );
+            const View::NodeIdVec storage_node_ids = current_view_->GetStorageNodes();
+            for(uint16_t storage_node_id : storage_node_ids){
+                HVLOG_F(1, "Register at storage node. engine_node={}, storage_node={}, view_id={}, sequencer_id={}",
+                    my_node_id(), storage_node_id, current_view_->id(), received_message.sequencer_id);
+                SendRegistrationRequest(storage_node_id, protocol::ConnType::ENGINE_TO_STORAGE, &request);
+            }
+        }
+    }
+    else if(result == protocol::SharedLogResultType::REGISTER_STORAGE_OK){
+        HLOG_F(INFO, "Registered at storage node. storeage_node={}, sequencer_id={}, storage_shard_id{}, engine_id={}", 
+            received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
+        if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
+            // unblock at sequencer
+            HLOG(INFO) << "Registered at all storage nodes. Register at sequencer node";
+            SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
+                SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
+                received_message.shard_id, received_message.engine_node_id,
+                received_message.local_start_id
+            );
+            SendRegistrationRequest(received_message.sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
+        }
+    }
+    else if (result == protocol::SharedLogResultType::REGISTER_UNBLOCK){
+        // registration finished
+        DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
+        HLOG_F(INFO, "Registration finished for sequencer_node={}, unblocked shard_id={}, local_start_id={}", 
+            received_message.origin_node_id, received_message.shard_id, received_message.local_start_id
+        );
+        const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, my_node_id()));
+        view_mutable_.UpdateMyStorageShards(logspace_id, storage_shard);
+        uint32_t local_start_id = view_mutable_.GetLocalStartOfConnection(received_message.logspace_id);
+        DCHECK_EQ(local_start_id, received_message.local_start_id);
+        HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
+        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(my_node_id(), current_view_, received_message.sequencer_id, received_message.local_start_id));
+        index_collection_.InstallLogSpace(std::make_unique<Index>(current_view_, received_message.sequencer_id));
+        // run ready requests
+        std::vector<SharedLogRequest> ready_requests;
+        future_requests_.OnNewView(current_view_, &ready_requests);
+        current_view_active_ = true;
+        HLOG(INFO) << "Current view active. Vamos!";
+        if (!ready_requests.empty()) {
+            HLOG_F(INFO, "{} requests for the new view", ready_requests.size());
+            SomeIOWorker()->ScheduleFunction(
+                nullptr, [this, requests = std::move(ready_requests)] () {
+                    ProcessRequests(requests);
+            });
+        }
+    }
+    else {
+        HLOG(ERROR) << "Registration logic unreachable";
+        UNREACHABLE();
     }
 }
 
@@ -517,18 +606,18 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
     } else {
         // Cache miss
-        const View::Engine* engine_node = nullptr;
+        const View::StorageShard* storage_shard = nullptr;
         {
             absl::ReaderMutexLock view_lk(&view_mu_);
             uint16_t view_id = query_result.found_result.view_id;
             if (view_id < views_.size()) {
                 const View* view = views_.at(view_id);
-                engine_node = view->GetEngineNode(query_result.found_result.engine_id);
+                storage_shard = view->GetStorageShard(query_result.StorageShardId());
             } else {
                 HLOG_F(FATAL, "Cannot find view {}", view_id);
             }
         }
-        bool success = SendStorageReadRequest(query_result, engine_node);
+        bool success = SendStorageReadRequest(query_result, storage_shard);
         if (!success) {
             HLOG_F(WARNING, "Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
             if (local_request) {
@@ -558,9 +647,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         const View* view = views_.at(view_id);
         uint32_t logspace_id = view->LogSpaceIdentifier(query.user_logspace);
         sequencer_node = view->GetSequencerNode(bits::LowHalf32(logspace_id));
-        if (sequencer_node->IsIndexEngineNode(my_node_id())) {
-            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
-        }
+        index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
     }
     if (index_ptr != nullptr) {
         HVLOG(1) << "Use local index";
@@ -569,6 +656,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         locked_index->MakeQuery(query);
         locked_index->PollQueryResults(more_results);
     } else {
+        // TODO: sent to index tier
         HVLOG(1) << "Send to remote index";
         SharedLogMessage request = BuildReadRequestMessage(query_result);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
@@ -635,7 +723,7 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     request.user_metalog_progress = op->metalog_progress;
     request.flags |= protocol::kReadInitialFlag;
     request.prev_view_id = 0;
-    request.prev_engine_id = 0;
+    request.prev_shard_id = 0;
     request.prev_found_seqnum = kInvalidLogSeqNum;
     return request;
 }
@@ -660,7 +748,7 @@ SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result)
     request.query_seqnum = query.query_seqnum;
     request.user_metalog_progress = result.metalog_progress;
     request.prev_view_id = result.found_result.view_id;
-    request.prev_engine_id = result.found_result.engine_id;
+    request.prev_shard_id = result.found_result.storage_shard_id;
     request.prev_found_seqnum = result.found_result.seqnum;
     return request;
 }
@@ -678,7 +766,7 @@ IndexQuery Engine::BuildIndexQuery(LocalOp* op) {
         .metalog_progress = op->metalog_progress,
         .prev_found_result = {
             .view_id = 0,
-            .engine_id = 0,
+            .storage_shard_id = 0,
             .seqnum = kInvalidLogSeqNum
         }
     };
@@ -704,7 +792,7 @@ IndexQuery Engine::BuildIndexQuery(const SharedLogMessage& message) {
         .metalog_progress = message.user_metalog_progress,
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
-            .engine_id = message.prev_engine_id,
+            .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
         }
     };

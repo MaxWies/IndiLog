@@ -12,6 +12,7 @@ namespace log {
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
+using protocol::SharedLogResultType;
 
 Storage::Storage(uint16_t node_id)
     : StorageBase(node_id),
@@ -60,9 +61,11 @@ void Storage::OnViewFinalized(const FinalizedView* finalized_view) {
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
     LogStorage::ReadResultVec results;
     std::vector<IndexDataProto> index_data_vec;
+    const ViewMutable* view_mutable;
     {
         absl::MutexLock view_lk(&view_mu_);
         DCHECK_EQ(finalized_view->view()->id(), current_view_->id());
+        view_mutable = &view_mutable_;
         storage_collection_.ForEachActiveLogSpace(
             finalized_view->view(),
             [&, finalized_view] (uint32_t logspace_id,
@@ -88,10 +91,10 @@ void Storage::OnViewFinalized(const FinalizedView* finalized_view) {
     }
     if (!index_data_vec.empty()) {
         SomeIOWorker()->ScheduleFunction(
-            nullptr, [this, view = finalized_view->view(),
+            nullptr, [this, view = finalized_view->view(), view_mutable = view_mutable,
                       index_data_vec = std::move(index_data_vec)] {
                 for (const IndexDataProto& index_data : index_data_vec) {
-                    SendIndexData(view, index_data);
+                    SendIndexData(view, view_mutable, index_data);
                 }
             }
         );
@@ -183,6 +186,7 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     const View* view = nullptr;
+    const ViewMutable* view_mutable = nullptr;
     LogStorage::ReadResultVec results;
     std::optional<IndexDataProto> index_data;
     {
@@ -190,6 +194,7 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
         view = current_view_;
+        view_mutable = &view_mutable_;
         auto storage_ptr = storage_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_storage = storage_ptr.Lock();
@@ -210,7 +215,7 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
     }
     ProcessReadResults(results);
     if (index_data.has_value()) {
-        SendIndexData(DCHECK_NOTNULL(view), *index_data);
+        SendIndexData(DCHECK_NOTNULL(view), DCHECK_NOTNULL(view_mutable), *index_data);
     }
 }
 
@@ -219,6 +224,58 @@ void Storage::OnRecvLogAuxData(const protocol::SharedLogMessage& message,
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::SET_AUXDATA);
     uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
     LogCachePutAuxData(seqnum, payload);
+}
+
+void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
+    DCHECK(SharedLogMessageHelper::GetOpType(received_message) == SharedLogOpType::REGISTER);
+    DCHECK(SharedLogMessageHelper::GetResultType(received_message) == SharedLogResultType::REGISTER_ENGINE);
+    absl::MutexLock view_lk(&view_mu_);
+    bool registration_failed = false;
+    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.shard_id)){
+        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.shard_id);
+        registration_failed = true;
+    }
+    if(received_message.view_id != current_view_->id()){
+        HLOG_F(WARNING, "Current view not the same. register_view={}, my_current_view={}", received_message.view_id, current_view_->id());
+        registration_failed = true;
+    }
+    if (registration_failed){
+        HLOG(WARNING) << "Registration failed";
+        SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+            SharedLogResultType::REGISTER_SEQUENCER_FAILED,
+            current_view_->id(),
+            received_message.sequencer_id,
+            received_message.shard_id,
+            received_message.engine_node_id,
+            received_message.local_start_id
+        );
+        SendRegistrationResponse(received_message, &response);
+        return;
+    }
+    uint32_t global_storage_shard_id = bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id);
+    if(current_view_->GetStorageNode(my_node_id())->IsStorageShardMember(global_storage_shard_id)){
+        // discard pending entries
+        HLOG_F(INFO, "Storage node is append target, discard pending entries. global_storage_shard_id={}, engine_id={}", global_storage_shard_id, received_message.engine_node_id);
+        auto storage_ptr = storage_collection_.GetLogSpaceChecked(received_message.logspace_id);
+        {
+            auto locked_storage = storage_ptr.Lock();
+            HVLOG(1) << "Remove pending entries";
+            locked_storage->RemovePendingEntries(received_message.shard_id);
+            HVLOG(1) << "Pending entries removed";
+        }
+    }
+    // occupation necessary for index updates
+    view_mutable_.PutStorageShardOccupation(global_storage_shard_id, received_message.engine_node_id);
+    HLOG_F(INFO, "Occupy shard for engine and send registration ok. global_storage_shard_id={}, engine_id={}", global_storage_shard_id, received_message.engine_node_id);
+    SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+            SharedLogResultType::REGISTER_STORAGE_OK,
+            received_message.view_id,
+            received_message.sequencer_id,
+            received_message.shard_id,
+            received_message.engine_node_id,
+            received_message.local_start_id
+    );
+    SendRegistrationResponse(received_message, &response);
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW

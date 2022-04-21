@@ -8,13 +8,13 @@ namespace log {
 MetaLogPrimary::MetaLogPrimary(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       replicated_metalog_position_(0) {
-    for (uint16_t engine_id : view_->GetEngineNodes()) {
-        const View::Engine* engine_node = view_->GetEngineNode(engine_id);
-        for (uint16_t storage_id : engine_node->GetStorageNodes()) {
-            auto pair = std::make_pair(engine_id, storage_id);
+    for (uint16_t storage_shard_id : sequencer_node_->GetStorageShardIds()) {
+        const View::StorageShard* storage_shard = view_->GetStorageShard(bits::JoinTwo16(sequencer_id, storage_shard_id));
+        for (uint16_t storage_id : storage_shard->GetStorageNodes()) {
+            auto pair = std::make_pair(storage_shard_id, storage_id);
             shard_progrsses_[pair] = 0;
         }
-        last_cut_[engine_id] = 0;
+        last_cut_[storage_shard_id] = 0;
     }
     for (uint16_t sequencer_id : sequencer_node_->GetReplicaSequencerNodes()) {
         metalog_progresses_[sequencer_id] = 0;
@@ -28,29 +28,73 @@ MetaLogPrimary::MetaLogPrimary(const View* view, uint16_t sequencer_id)
 
 MetaLogPrimary::~MetaLogPrimary() {}
 
+bool MetaLogPrimary::BlockShard(uint16_t shard_id, uint32_t* last_cut) {
+    if(!last_cut_.contains(shard_id)){
+        HLOG_F(ERROR, "Shard={} is not known", shard_id);
+        *last_cut = 0;
+        return false;
+    }
+    if(!unblocked_shards_.contains(shard_id)){
+        HLOG_F(INFO, "Shard={} is already blocked", shard_id);
+        *last_cut = last_cut_.at(shard_id);
+        return true;
+    }
+    if(dirty_shards_.contains(shard_id)){
+        dirty_shards_.erase(shard_id);
+        HLOG_F(INFO, "Shard={} was dirty", shard_id);
+    }
+    HLOG_F(INFO, "Block shard={}", shard_id);
+    unblocked_shards_.erase(shard_id);
+    blocking_change_ = true;
+    *last_cut = last_cut_.at(shard_id);
+    return true;
+}
+
+bool MetaLogPrimary::UnblockShard(uint16_t shard_id, uint32_t* last_cut) {
+    if(!last_cut_.contains(shard_id)){
+        HLOG_F(ERROR, "Shard={} is not known", shard_id);
+        *last_cut = 0;
+        return false;
+    }
+    if(unblocked_shards_.contains(shard_id)){
+        HLOG_F(WARNING, "Shard={} is already unblocked", shard_id);
+        *last_cut = 0;
+        return false;
+    }
+    HLOG_F(INFO, "Unblock shard={}", shard_id);
+    unblocked_shards_.insert(shard_id);
+    blocking_change_ = true;
+    *last_cut = last_cut_.at(shard_id);
+    return true;
+}
+
 void MetaLogPrimary::UpdateStorageProgress(uint16_t storage_id,
                                            const std::vector<uint32_t>& progress) {
     if (!view_->contains_storage_node(storage_id)) {
         HLOG_F(FATAL, "View {} does not has storage node {}", view_->id(), storage_id);
     }
     const View::Storage* storage_node = view_->GetStorageNode(storage_id);
-    const View::NodeIdVec& engine_node_ids = storage_node->GetSourceEngineNodes();
-    if (progress.size() != engine_node_ids.size()) {
+    const View::ShardIdVec& storage_shard_ids = storage_node->GetStorageShardIds();
+    if (progress.size() != storage_shard_ids.size()) {
         HLOG_F(FATAL, "Size does not match: have={}, expected={}",
-               progress.size(), engine_node_ids.size());
+               progress.size(), storage_shard_ids.size());
     }
     for (size_t i = 0; i < progress.size(); i++) {
-        uint16_t engine_id = engine_node_ids[i];
-        auto pair = std::make_pair(engine_id, storage_id);
+        uint16_t storage_shard_id = bits::LowHalf32(storage_shard_ids[i]);
+        if(!unblocked_shards_.contains(storage_shard_id)){
+            HVLOG_F(1, "Shard {} is blocked", storage_shard_id);
+            continue;
+        }
+        auto pair = std::make_pair(storage_shard_id, storage_id);
         DCHECK(shard_progrsses_.contains(pair));
         if (progress[i] > shard_progrsses_[pair]) {
             shard_progrsses_[pair] = progress[i];
-            uint32_t current_position = GetShardReplicatedPosition(engine_id);
-            DCHECK_GE(current_position, last_cut_.at(engine_id));
-            if (current_position > last_cut_.at(engine_id)) {
-                HVLOG_F(1, "Store progress from storage {} for engine {}: {}",
-                        storage_id, engine_id, bits::HexStr0x(current_position));
-                dirty_shards_.insert(engine_id);
+            uint32_t current_position = GetShardReplicatedPosition(storage_shard_id);
+            DCHECK_GE(current_position, last_cut_.at(storage_shard_id));
+            if (current_position > last_cut_.at(storage_shard_id)) {
+                HVLOG_F(1, "Store progress from storage {} for storage_shard {}: {}",
+                        storage_id, storage_shard_id, bits::HexStr0x(current_position));
+                dirty_shards_.insert(storage_shard_id);
             }
         }
     }
@@ -83,18 +127,21 @@ std::optional<MetaLogProto> MetaLogPrimary::MarkNextCut() {
     auto* new_logs_proto = meta_log_proto.mutable_new_logs_proto();
     new_logs_proto->set_start_seqnum(bits::LowHalf64(seqnum_position()));
     uint32_t total_delta = 0;
-    for (uint16_t engine_id : view_->GetEngineNodes()) {
-        new_logs_proto->add_shard_starts(last_cut_.at(engine_id));
+    for (uint16_t shard_id : unblocked_shards_) {
+        meta_log_proto.add_storage_shard_ids(shard_id);
+        new_logs_proto->add_shard_starts(last_cut_.at(shard_id));
         uint32_t delta = 0;
-        if (dirty_shards_.contains(engine_id)) {
-            uint32_t current_position = GetShardReplicatedPosition(engine_id);
-            DCHECK_GT(current_position, last_cut_.at(engine_id));
-            delta = current_position - last_cut_.at(engine_id);
-            last_cut_[engine_id] = current_position;
+        if (dirty_shards_.contains(shard_id)) {
+            uint32_t current_position = GetShardReplicatedPosition(shard_id);
+            DCHECK_GT(current_position, last_cut_.at(shard_id));
+            delta = current_position - last_cut_.at(shard_id);
+            last_cut_[shard_id] = current_position;
         }
         new_logs_proto->add_shard_deltas(delta);
         total_delta += delta;
     }
+    meta_log_proto.set_storage_shard_change(blocking_change_);
+    blocking_change_ = false;
     dirty_shards_.clear();
     HVLOG_F(1, "Generate new NEW_LOGS meta log: start_seqnum={}, total_delta={}",
             new_logs_proto->start_seqnum(), total_delta);
@@ -125,11 +172,11 @@ void MetaLogPrimary::UpdateMetaLogReplicatedPosition() {
     replicated_metalog_position_ = progress;
 }
 
-uint32_t MetaLogPrimary::GetShardReplicatedPosition(uint16_t engine_id) const {
+uint32_t MetaLogPrimary::GetShardReplicatedPosition(uint16_t storage_shard_id) const {
     uint32_t min_value = std::numeric_limits<uint32_t>::max();
-    const View::Engine* engine_node = view_->GetEngineNode(engine_id);
-    for (uint16_t storage_id : engine_node->GetStorageNodes()) {
-        auto pair = std::make_pair(engine_id, storage_id);
+    const View::StorageShard* storage_shard = view_->GetStorageShard(bits::JoinTwo16(sequencer_node_->node_id(), storage_shard_id));
+    for (uint16_t storage_id : storage_shard->GetStorageNodes()) {
+        auto pair = std::make_pair(storage_shard_id, storage_id);
         DCHECK(shard_progrsses_.contains(pair));
         min_value = std::min(min_value, shard_progrsses_.at(pair));
     }
@@ -145,10 +192,10 @@ MetaLogBackup::MetaLogBackup(const View* view, uint16_t sequencer_id)
 
 MetaLogBackup::~MetaLogBackup() {}
 
-LogProducer::LogProducer(uint16_t engine_id, const View* view, uint16_t sequencer_id)
+LogProducer::LogProducer(uint16_t storage_shard_id, const View* view, uint16_t sequencer_id, uint32_t next_start_id)
     : LogSpaceBase(LogSpaceBase::kLiteMode, view, sequencer_id),
-      next_localid_(bits::JoinTwo32(engine_id, 0)) {
-    AddInterestedShard(engine_id);
+      next_localid_(bits::JoinTwo32(storage_shard_id, next_start_id)) {
+    AddInterestedShard(storage_shard_id);
     log_header_ = fmt::format("LogProducer[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -202,11 +249,12 @@ void LogProducer::OnFinalized(uint32_t metalog_position) {
 LogStorage::LogStorage(uint16_t storage_id, const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kLiteMode, view, sequencer_id),
       storage_node_(view_->GetStorageNode(storage_id)),
-      shard_progrss_dirty_(false),
+      shard_progress_dirty_(false),
       persisted_seqnum_position_(0) {
-    for (uint16_t engine_id : storage_node_->GetSourceEngineNodes()) {
-        AddInterestedShard(engine_id);
-        shard_progrsses_[engine_id] = 0;
+    for (uint32_t global_storage_shard_id : storage_node_->GetStorageShardIds()){
+        // we only consider the local shard ids
+        shard_progresses_[bits::LowHalf32(global_storage_shard_id)] = 0;
+        AddInterestedShard(bits::LowHalf32(global_storage_shard_id));
     }
     index_data_.set_logspace_id(identifier());
     log_header_ = fmt::format("LogStorage[{}-{}]: ", view->id(), sequencer_id);
@@ -219,20 +267,16 @@ bool LogStorage::Store(const LogMetaData& log_metadata, std::span<const uint64_t
                        std::span<const char> log_data) {
     uint64_t localid = log_metadata.localid;
     DCHECK_EQ(size_t{log_metadata.data_size}, log_data.size());
-    uint16_t engine_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
-    HVLOG_F(1, "Store log from engine {} with localid {}",
-            engine_id, bits::HexStr0x(localid));
-    if (!storage_node_->IsSourceEngineNode(engine_id)) {
-        HLOG_F(ERROR, "Not storage node (node_id {}) for engine (node_id {})",
-               storage_node_->node_id(), engine_id);
-        return false;
-    }
+    uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(bits::HighHalf64(localid));
+    HVLOG_F(1, "Store log from storage_shard {} with localid {}",
+            storage_shard_id, bits::HexStr0x(localid));
+    //TODO: add ismember of storage node check
     pending_log_entries_[localid].reset(new LogEntry {
         .metadata = log_metadata,
         .user_tags = UserTagVec(user_tags.begin(), user_tags.end()),
         .data = std::string(log_data.data(), log_data.size()),
     });
-    AdvanceShardProgress(engine_id);
+    AdvanceShardProgress(storage_shard_id);
     return true;
 }
 
@@ -313,15 +357,16 @@ std::optional<IndexDataProto> LogStorage::PollIndexData() {
 }
 
 std::optional<std::vector<uint32_t>> LogStorage::GrabShardProgressForSending() {
-    if (!shard_progrss_dirty_) {
+    if (!shard_progress_dirty_) {
         return std::nullopt;
     }
     std::vector<uint32_t> progress;
-    progress.reserve(storage_node_->GetSourceEngineNodes().size());
-    for (uint16_t engine_id : storage_node_->GetSourceEngineNodes()) {
-        progress.push_back(shard_progrsses_[engine_id]);
+    progress.reserve(storage_node_->GetStorageShardIds().size());
+    for (uint32_t global_storage_shard_id : storage_node_->GetStorageShardIds()) {
+        uint16_t storage_shard_id = bits::LowHalf32(global_storage_shard_id);
+        progress.push_back(shard_progresses_[storage_shard_id]);
     }
-    shard_progrss_dirty_ = false;
+    shard_progress_dirty_ = false;
     return progress;
 }
 
@@ -391,18 +436,18 @@ void LogStorage::OnFinalized(uint32_t metalog_position) {
     }
 }
 
-void LogStorage::AdvanceShardProgress(uint16_t engine_id) {
-    uint32_t current = shard_progrsses_[engine_id];
-    while (pending_log_entries_.contains(bits::JoinTwo32(engine_id, current))) {
+void LogStorage::AdvanceShardProgress(uint16_t storage_shard_id) {
+    uint32_t current = shard_progresses_[storage_shard_id];
+    while (pending_log_entries_.contains(bits::JoinTwo32(storage_shard_id, current))) {
         current++;
     }
-    if (current > shard_progrsses_[engine_id]) {
-        HVLOG_F(1, "Update shard progres for engine {}: from={}, to={}",
-                engine_id,
-                bits::HexStr0x(shard_progrsses_[engine_id]),
+    if (current > shard_progresses_[storage_shard_id]) {
+        HVLOG_F(1, "Update shard progres for storage_shard {}: from={}, to={}",
+                storage_shard_id,
+                bits::HexStr0x(shard_progresses_[storage_shard_id]),
                 bits::HexStr0x(current));
-        shard_progrss_dirty_ = true;
-        shard_progrsses_[engine_id] = current;
+        shard_progress_dirty_ = true;
+        shard_progresses_[storage_shard_id] = current;
     }
 }
 
@@ -413,6 +458,16 @@ void LogStorage::ShrinkLiveEntriesIfNeeded() {
         live_log_entries_.erase(live_seqnums_.front());
         live_seqnums_.pop_front();
         DCHECK_EQ(live_seqnums_.size(), live_log_entries_.size());
+    }
+}
+
+void LogStorage::RemovePendingEntries(uint16_t storage_shard_id) {
+    auto iter = pending_log_entries_.begin();
+    while (iter != pending_log_entries_.end()) {
+        if (gsl::narrow_cast<uint16_t>(bits::HighHalf64(iter->first) == storage_shard_id)){
+            HLOG_F(INFO, "Remove entry {}", bits::HexStr0x(iter->first));
+            pending_log_entries_.erase(iter);
+        }
     }
 }
 

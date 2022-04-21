@@ -30,7 +30,7 @@ private:
     absl::flat_hash_map<std::pair</*engine_id*/uint16_t, /* client_data */ uint64_t>, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
 
     void OnViewCreated(const View* view) override;
-    void OnViewFrozen(const View* view) override;
+    // void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
     void HandleReadRequest(const protocol::SharedLogMessage& request) override;

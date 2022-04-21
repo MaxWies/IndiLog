@@ -12,6 +12,7 @@ namespace log {
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
+using protocol::SharedLogResultType;
 
 using server::IOWorker;
 using server::ConnectionBase;
@@ -74,6 +75,9 @@ void SequencerBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::METALOGS:
         OnRecvNewMetaLogs(message, payload);
         break;
+    case SharedLogOpType::REGISTER:
+        OnRecvRegistration(message);
+        break;
     default:
         UNREACHABLE();
     }
@@ -108,22 +112,18 @@ void SequencerBase::ReplicateMetaLog(const View* view, const MetaLogProto& metal
     }
 }
 
-void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metalog) {
+void SequencerBase::PropagateMetaLog(const View* view, const ViewMutable* view_mutable, const MetaLogProto& metalog) {
     uint32_t logspace_id = metalog.logspace_id();
     DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id());
     absl::flat_hash_set<uint16_t> engine_nodes;
     absl::flat_hash_set<uint16_t> storage_nodes;
     switch (metalog.type()) {
     case MetaLogProto::NEW_LOGS:
-        for (size_t i = 0; i < view->num_engine_nodes(); i++) {
-            uint16_t engine_id = view->GetEngineNodes().at(i);
-            const View::Engine* engine_node = view->GetEngineNode(engine_id);
-            //todo: better naming -> engine node just has sequencers
-            if (engine_node->HasIndexFor(my_node_id())){
-                engine_nodes.insert(engine_id);
-                for (uint16_t storage_id : engine_node->GetStorageNodes()) {
+        for (const auto& [storage_shard_id, engine_node_id] : view_mutable->GetStorageShardOccupation()){
+            engine_nodes.insert(engine_node_id);
+            const View::StorageShard* storage_shard = view->GetStorageShard(storage_shard_id);
+            for (uint16_t storage_id : storage_shard->GetStorageNodes()) {
                     storage_nodes.insert(storage_id);
-                }
             }
         }
         break;
@@ -133,6 +133,7 @@ void SequencerBase::PropagateMetaLog(const View* view, const MetaLogProto& metal
     default:
         UNREACHABLE();
     }
+    HVLOG_F(1, "Propagate metalog to {} engines and {} storage nodes", engine_nodes.size(), storage_nodes.size());
     SharedLogMessage message = SharedLogMessageHelper::NewMetaLogsMessage(metalog.logspace_id());
     std::string payload = SerializedMetaLogs(metalog);
     message.origin_node_id = node_id_;
@@ -173,6 +174,14 @@ bool SequencerBase::SendEngineResponse(const SharedLogMessage& request,
     response->client_data = request.client_data;
     return SendSharedLogMessage(protocol::ConnType::SEQUENCER_TO_ENGINE,
                                 request.origin_node_id, *response, payload);
+}
+
+bool SequencerBase::SendRegistrationResponse(const SharedLogMessage& request, protocol::ConnType connection_type,
+                                       SharedLogMessage* response) {
+    response->origin_node_id = node_id_;
+    response->hop_times = request.hop_times + 1;
+    response->payload_size = 0;
+    return SendSharedLogMessage(connection_type, request.origin_node_id, *response);
 }
 
 void SequencerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,

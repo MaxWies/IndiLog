@@ -50,6 +50,7 @@ protected:
                                     std::span<const char> payload) = 0;
     virtual void OnRecvResponse(const protocol::SharedLogMessage& message,
                                 std::span<const char> payload) = 0;
+    virtual void OnRecvRegistrationResponse(const protocol::SharedLogMessage& message) = 0;
 
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
@@ -76,10 +77,10 @@ protected:
 
     void LocalOpHandler(LocalOp* op);
 
-    void ReplicateLogEntry(const View* view, const LogMetaData& log_metadata,
+    void ReplicateLogEntry(const View* view, const View::StorageShard* storage_shard, const LogMetaData& log_metadata,
                            std::span<const uint64_t> user_tags,
                            std::span<const char> log_data);
-    void PropagateAuxData(const View* view, const LogMetaData& log_metadata, 
+    void PropagateAuxData(const View* view, const View::StorageShard* storage_shard, const LogMetaData& log_metadata, 
                           std::span<const char> aux_data);
 
     void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
@@ -96,8 +97,7 @@ protected:
     bool SendIndexReadRequest(const View::Sequencer* sequencer_node,
                               protocol::SharedLogMessage* request);
     bool SendIndexTierReadRequest(uint16_t index_node_id, protocol::SharedLogMessage* request);
-    bool SendStorageReadRequest(const IndexQueryResult& result,
-                                const View::Engine* engine_node);
+    bool SendStorageReadRequest(const IndexQueryResult& result, const View::StorageShard* storage_shard);
     void SendReadResponse(const IndexQuery& query,
                           protocol::SharedLogMessage* response,
                           std::span<const char> user_tags_payload = EMPTY_CHAR_SPAN,
@@ -109,6 +109,8 @@ protected:
     bool SendSequencerMessage(uint16_t sequencer_id,
                               protocol::SharedLogMessage* message,
                               std::span<const char> payload = EMPTY_CHAR_SPAN);
+
+    bool SendRegistrationRequest(uint16_t destination_id, protocol::ConnType connection_type, protocol::SharedLogMessage* message);
 
     server::IOWorker* SomeIOWorker();
 

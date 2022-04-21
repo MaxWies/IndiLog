@@ -18,23 +18,27 @@ public:
         return replicated_metalog_position_ == metalog_position();
     }
 
-    void UpdateStorageProgress(uint16_t storage_id,
-                               const std::vector<uint32_t>& progress);
+    bool BlockShard(uint16_t shard_id, uint32_t* last_cut);
+    bool UnblockShard(uint16_t shard_id, uint32_t* last_cut);
+    void UpdateStorageProgress(uint16_t storage_id, const std::vector<uint32_t>& progress);
     void UpdateReplicaProgress(uint16_t sequencer_id, uint32_t metalog_position);
     std::optional<MetaLogProto> MarkNextCut();
 
 private:
-    absl::flat_hash_set</* engine_id */ uint16_t> dirty_shards_;
-    absl::flat_hash_map</* engine_id */ uint16_t, uint32_t> last_cut_;
-    absl::flat_hash_map<std::pair</* engine_id */  uint16_t,
+    absl::flat_hash_set</* shard_id */ uint16_t> dirty_shards_;
+    absl::flat_hash_map</* shard_id */ uint16_t, uint32_t> last_cut_;
+    absl::flat_hash_map<std::pair</* shard_id */  uint16_t,
                                   /* storage_id */ uint16_t>,
                         uint32_t> shard_progrsses_;
+
+    absl::flat_hash_set</* shard_id */ uint16_t> unblocked_shards_;
+    bool blocking_change_;
 
     absl::flat_hash_map</* sequencer_id */ uint16_t,
                         uint32_t> metalog_progresses_;
     uint32_t replicated_metalog_position_;
 
-    uint32_t GetShardReplicatedPosition(uint16_t engine_id) const;
+    uint32_t GetShardReplicatedPosition(uint16_t storage_shard_id) const;
     void UpdateMetaLogReplicatedPosition();
 
     DISALLOW_COPY_AND_ASSIGN(MetaLogPrimary);
@@ -53,7 +57,7 @@ private:
 // Used in Engine
 class LogProducer final : public LogSpaceBase {
 public:
-    LogProducer(uint16_t engine_id, const View* view, uint16_t sequencer_id);
+    LogProducer(uint16_t engine_id, const View* view, uint16_t sequencer_id, uint32_t next_start_id);
     ~LogProducer();
 
     void LocalAppend(void* caller_data, uint64_t* localid);
@@ -96,6 +100,8 @@ public:
             uint64_t* new_position) const;
     void LogEntriesPersisted(uint64_t new_position);
 
+    void RemovePendingEntries(uint16_t storage_shard_id);
+
     struct ReadResult {
         enum Status { kOK, kLookupDB, kFailed };
         Status status;
@@ -111,9 +117,9 @@ public:
 private:
     const View::Storage* storage_node_;
 
-    bool shard_progrss_dirty_;
-    absl::flat_hash_map</* engine_id */ uint16_t,
-                        /* localid */ uint32_t> shard_progrsses_;
+    bool shard_progress_dirty_;
+    absl::flat_hash_map</* storage_shard_id */ uint16_t,
+                        /* localid          */ uint32_t> shard_progresses_;
 
     uint64_t persisted_seqnum_position_;
     std::deque<uint64_t> live_seqnums_;

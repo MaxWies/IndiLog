@@ -97,6 +97,9 @@ void StorageBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::SET_AUXDATA:
         OnRecvLogAuxData(message, payload);
         break;
+    case SharedLogOpType::REGISTER:
+        OnRecvRegistration(message);
+        break;
     default:
         UNREACHABLE();
     }
@@ -145,21 +148,21 @@ std::optional<std::string> StorageBase::LogCacheGetAuxData(uint64_t seqnum) {
     return log_cache_.has_value() ? log_cache_->GetAuxData(seqnum) : std::nullopt;
 }
 
-void StorageBase::SendIndexData(const View* view,
+void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutable,
                                 const IndexDataProto& index_data_proto) {
     uint32_t logspace_id = index_data_proto.logspace_id();
     DCHECK_EQ(view->id(), bits::HighHalf32(logspace_id));
-    const View::Sequencer* sequencer_node = view->GetSequencerNode(
-        bits::LowHalf32(logspace_id));
     std::string serialized_data;
     CHECK(index_data_proto.SerializeToString(&serialized_data));
     SharedLogMessage message = SharedLogMessageHelper::NewIndexDataMessage(
         logspace_id);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(serialized_data.size());
-    for (uint16_t engine_id : sequencer_node->GetIndexEngineNodes()) {
-        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
+    for (auto& [shard_id, engine_id] : view_mutable->GetStorageShardOccupation()) {
+        if(bits::HighHalf32(shard_id) == bits::LowHalf32(logspace_id)){
+            SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
                              engine_id, message, STRING_AS_SPAN(serialized_data));
+        }
     }
     // send index data to shard
     const View::Storage* storage_node = view->GetStorageNode(my_node_id());
@@ -218,6 +221,13 @@ bool StorageBase::SendEngineResponse(const SharedLogMessage& request,
     return SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
                                 request.origin_node_id, *response,
                                 payload1, payload2, payload3);
+}
+
+void StorageBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
+    response->origin_node_id = node_id_;
+    response->hop_times = request.hop_times + 1;
+    response->payload_size = 0;
+    SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE, request.origin_node_id, *response);
 }
 
 void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,

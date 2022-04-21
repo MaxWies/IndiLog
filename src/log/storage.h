@@ -17,6 +17,7 @@ private:
 
     absl::Mutex view_mu_;
     const View* current_view_      ABSL_GUARDED_BY(view_mu_);
+    ViewMutable view_mutable_      ABSL_GUARDED_BY(view_mu_);
     bool view_finalized_           ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<LogStorage>
         storage_collection_        ABSL_GUARDED_BY(view_mu_);
@@ -33,6 +34,7 @@ private:
                            std::span<const char> payload) override;
     void OnRecvLogAuxData(const protocol::SharedLogMessage& message,
                           std::span<const char> payload) override;
+    void OnRecvRegistration(const protocol::SharedLogMessage& message) override;
 
     void ProcessReadResults(const LogStorage::ReadResultVec& results);
     void ProcessReadFromDB(const protocol::SharedLogMessage& request);

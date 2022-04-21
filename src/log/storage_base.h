@@ -33,6 +33,7 @@ protected:
                                    std::span<const char> payload) = 0;
     virtual void OnRecvLogAuxData(const protocol::SharedLogMessage& message,
                                   std::span<const char> payload) = 0;
+    virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
 
     virtual void BackgroundThreadMain() = 0;
     virtual void SendShardProgressIfNeeded() = 0;
@@ -45,7 +46,7 @@ protected:
     std::optional<LogEntryProto> GetLogEntryFromDB(uint64_t seqnum);
     void PutLogEntryToDB(const LogEntry& log_entry);
 
-    void SendIndexData(const View* view, const IndexDataProto& index_data_proto);
+    void SendIndexData(const View* view, const ViewMutable* view_mutable, const IndexDataProto& index_data_proto);
     bool SendSequencerMessage(uint16_t sequencer_id,
                               protocol::SharedLogMessage* message,
                               std::span<const char> payload);
@@ -54,6 +55,7 @@ protected:
                             std::span<const char> payload1 = EMPTY_CHAR_SPAN,
                             std::span<const char> payload2 = EMPTY_CHAR_SPAN,
                             std::span<const char> payload3 = EMPTY_CHAR_SPAN);
+    void SendRegistrationResponse(const protocol::SharedLogMessage& request, protocol::SharedLogMessage* response);
 
 private:
     const uint16_t node_id_;
@@ -89,7 +91,7 @@ private:
                                 std::span<const char> payload);
     bool SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
                               const protocol::SharedLogMessage& message,
-                              std::span<const char> payload1,
+                              std::span<const char> payload1 = EMPTY_CHAR_SPAN,
                               std::span<const char> payload2 = EMPTY_CHAR_SPAN,
                               std::span<const char> payload3 = EMPTY_CHAR_SPAN);
 
