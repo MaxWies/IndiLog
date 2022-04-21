@@ -127,11 +127,6 @@ void EngineBase::LocalOpHandler(LocalOp* op) {
 void EngineBase::MessageHandler(const SharedLogMessage& message,
                                 std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
-    case SharedLogOpType::READ_NEXT:
-    case SharedLogOpType::READ_PREV:
-    case SharedLogOpType::READ_NEXT_B:
-        HandleRemoteRead(message);
-        break;
     case SharedLogOpType::INDEX_DATA:
         OnRecvNewIndexData(message, payload);
         break;

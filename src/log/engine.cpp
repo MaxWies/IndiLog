@@ -75,6 +75,7 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
     LogProducer::AppendResultVec append_results;
     Index::QueryResultVec query_results;
+    Index::QueryResultVec local_index_misses;
     {
         absl::MutexLock view_lk(&view_mu_);
         DCHECK_EQ(finalized_view->view()->id(), current_view_->id());
@@ -110,8 +111,28 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     }
     if (!query_results.empty()) {
         SomeIOWorker()->ScheduleFunction(
-            nullptr, [this, results = std::move(query_results)] {
-                ProcessIndexQueryResults(results);
+            nullptr, [this, results = std::move(query_results), &local_index_misses] {
+                ProcessIndexQueryResults(results, &local_index_misses);
+            }
+        );
+    }
+    if (!local_index_misses.empty()) {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        auto my_storage_shards = view_mutable_.GetMyStorageShards();
+        SomeIOWorker()->ScheduleFunction(
+            nullptr, [this, misses = std::move(local_index_misses), finalized_view = finalized_view, storage_shards = my_storage_shards] 
+            {
+                for(const IndexQueryResult& miss : misses){
+                    LocalOp* op = onging_reads_.GetChecked(miss.original_query.client_data);
+                    uint32_t logspace_identifier = finalized_view->view()->LogSpaceIdentifier(op->user_logspace);
+                    if(!storage_shards.contains(logspace_identifier)){
+                        onging_reads_.RemoveChecked(op->id);
+                        FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+                        continue;
+                    }
+                    const View::StorageShard* shard = storage_shards.at(logspace_identifier);
+                    HandleIndexTierRead(op, finalized_view->view()->id(), shard);
+                }
             }
         );
     }
@@ -198,6 +219,31 @@ void Engine::HandleLocalTrim(LocalOp* op) {
     NOT_IMPLEMENTED();
 }
 
+void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::StorageShard* storage_shard){
+    HVLOG(1) << "Send request to index tier";
+    std::vector<uint16_t> index_nodes;
+    storage_shard->PickIndexNodePerShard(index_nodes);
+    uint16_t master_index_node = index_nodes.at(0);
+    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
+    request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
+    request.view_id = view_id;
+    bool send_success = true;
+    std::ostringstream os;
+    for(uint16_t index_node : index_nodes){
+        send_success &= SendIndexTierReadRequest(index_node, &request);
+        os << index_node << ",";
+    }
+    std::string index_nodes_str(os.str());
+    if (!send_success) {
+        HLOG_F(WARNING, "Failed to send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+        onging_reads_.RemoveChecked(op->id);
+        FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+        return;
+    }
+    HVLOG_F(1, "Sent request to index tier successully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+    return;
+}
+
 void Engine::HandleLocalRead(LocalOp* op) {
     DCHECK(  op->type == SharedLogOpType::READ_NEXT
           || op->type == SharedLogOpType::READ_PREV
@@ -211,33 +257,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
     }
     onging_reads_.PutChecked(op->id, op);
     ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-    const View::Sequencer* sequencer_node = nullptr;
     if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
-        HVLOG(1) << "Send request to index tier";
-        ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-        sequencer_node = current_view_->GetSequencerNode(bits::LowHalf32(logspace_id));
-        const View::StorageShard* storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
-        std::vector<uint16_t> index_nodes;
-        storage_shard->PickIndexNodePerShard(index_nodes);
-        uint16_t master_index_node = index_nodes.at(0);
-        SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
-        request.sequencer_id = sequencer_node->node_id();
-        request.view_id = sequencer_node->view()->id();
-        bool send_success = true;
-        std::ostringstream os;
-        for(uint16_t index_node : index_nodes){
-            send_success &= SendIndexTierReadRequest(index_node, &request);
-            os << index_node << ",";
-        }
-        std::string index_nodes_str(os.str());
-        if (!send_success) {
-            HLOG_F(WARNING, "Failed to send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
-            onging_reads_.RemoveChecked(op->id);
-            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
-            return;
-        }
-        HVLOG_F(1, "Sent request to index tier successully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
-        return;
+        HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
     }
     //TODO:local indexing
     LockablePtr<Index> index_ptr;
@@ -254,6 +275,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
             use_local_index = false;
         }
     }
+    Index::QueryResultVec local_index_misses;
     if (index_ptr != nullptr && use_local_index) {
         // Use local index
         IndexQuery query = BuildIndexQuery(op);
@@ -263,17 +285,13 @@ void Engine::HandleLocalRead(LocalOp* op) {
             locked_index->MakeQuery(query);
             locked_index->PollQueryResults(&query_results);
         }
-        ProcessIndexQueryResults(query_results);
+        ProcessIndexQueryResults(query_results, &local_index_misses);
     } else {
-        HVLOG_F(1, "There is no local index for sequencer {}, "
-                   "will send request to remote engine node",
-                DCHECK_NOTNULL(sequencer_node)->node_id());
-        SharedLogMessage request = BuildReadRequestMessage(op);
-        bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
-        if (!send_success) {
-            onging_reads_.RemoveChecked(op->id);
-            FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
-        }
+        HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
+        HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+    }
+    if(!local_index_misses.empty()){
+        ProcessLocalIndexMisses(local_index_misses, logspace_id);
     }
 }
 
@@ -326,28 +344,6 @@ void Engine::HandleLocalSetAuxData(LocalOp* op) {
         }                                                           \
     } while (0)
 
-void Engine::HandleRemoteRead(const SharedLogMessage& request) {
-    SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
-    DCHECK(  op_type == SharedLogOpType::READ_NEXT
-          || op_type == SharedLogOpType::READ_PREV
-          || op_type == SharedLogOpType::READ_NEXT_B);
-    LockablePtr<Index> index_ptr;
-    {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
-        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(request.logspace_id);
-        index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
-    }
-    IndexQuery query = BuildIndexQuery(request);
-    Index::QueryResultVec query_results;
-    {
-        auto locked_index = index_ptr.Lock();
-        locked_index->MakeQuery(query);
-        locked_index->PollQueryResults(&query_results);
-    }
-    ProcessIndexQueryResults(query_results);
-}
-
 void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                                std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::METALOGS);
@@ -355,6 +351,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     LogProducer::AppendResultVec append_results;
     Index::QueryResultVec query_results;
+    Index::QueryResultVec local_index_misses;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
@@ -379,7 +376,10 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         }
     }
     ProcessAppendResults(append_results);
-    ProcessIndexQueryResults(query_results);
+    ProcessIndexQueryResults(query_results, &local_index_misses);
+    if(!local_index_misses.empty()){
+        ProcessLocalIndexMisses(local_index_misses, message.logspace_id);
+    }
 }
 
 void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
@@ -391,6 +391,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
         LOG(FATAL) << "Failed to parse IndexDataProto";
     }
     Index::QueryResultVec query_results;
+    Index::QueryResultVec local_index_misses;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
@@ -405,7 +406,21 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
             locked_index->PollQueryResults(&query_results);
         }
     }
-    ProcessIndexQueryResults(query_results);
+    ProcessIndexQueryResults(query_results, &local_index_misses);
+    if(!local_index_misses.empty()){
+        ProcessLocalIndexMisses(local_index_misses, message.logspace_id);
+    }
+}
+
+void Engine::ProcessLocalIndexMisses(const Index::QueryResultVec& misses, uint32_t logspace_id){
+    absl::ReaderMutexLock view_lk(&view_mu_);
+    for(const IndexQueryResult& miss : misses){
+        HandleIndexTierRead(
+            onging_reads_.GetChecked(miss.original_query.client_data), 
+            current_view_->id(), 
+            view_mutable_.GetMyStorageShard(logspace_id)
+        );
+    }
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
@@ -669,23 +684,16 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     }
 }
 
-void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
+void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* local_index_misses) {
     Index::QueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
-        const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
             ProcessIndexFoundResult(result);
             break;
         case IndexQueryResult::kEmpty:
-            if (query.origin_node_id == my_node_id()) {
-                FinishLocalOpWithFailure(
-                    onging_reads_.PollChecked(query.client_data),
-                    SharedLogResultType::EMPTY, result.metalog_progress);
-            } else {
-                SendReadFailureResponse(
-                    query, SharedLogResultType::EMPTY, result.metalog_progress);
-            }
+            HVLOG(1) << "No result for query. Request must be handled by index tier";
+            local_index_misses->push_back(result);
             break;
         case IndexQueryResult::kContinue:
             ProcessIndexContinueResult(result, &more_results);
@@ -695,7 +703,7 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
         }
     }
     if (!more_results.empty()) {
-        ProcessIndexQueryResults(more_results);
+        ProcessIndexQueryResults(more_results, local_index_misses);
     }
 }
 

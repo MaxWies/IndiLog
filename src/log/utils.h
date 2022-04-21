@@ -41,6 +41,7 @@ public:
 
     // All these APIs are thread safe
     void Put(uint64_t key, T* value);         // Override if the given key exists
+    T*   GetChecked(uint64_t key);            // Panic if key does not exist
     bool Poll(uint64_t key, T** value);       // Remove the given key if it is found
     void PutChecked(uint64_t key, T* value);  // Panic if key exists
     T*   PollChecked(uint64_t key);           // Panic if key does not exist
@@ -87,6 +88,13 @@ template<class T>
 void ThreadedMap<T>::Put(uint64_t key, T* value) {
     absl::MutexLock lk(&mu_);
     rep_[key] = value;
+}
+
+template<class T>
+T* ThreadedMap<T>::GetChecked(uint64_t key) {
+    absl::MutexLock lk(&mu_);
+    DCHECK(rep_.contains(key));
+    return rep_[key];
 }
 
 template<class T>

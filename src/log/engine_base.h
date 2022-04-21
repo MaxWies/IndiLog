@@ -43,7 +43,6 @@ protected:
     virtual void OnViewFrozen(const View* view) = 0;
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
-    virtual void HandleRemoteRead(const protocol::SharedLogMessage& request) = 0;
     virtual void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                                    std::span<const char> payload) = 0;
     virtual void OnRecvNewIndexData(const protocol::SharedLogMessage& message,

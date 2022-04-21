@@ -42,7 +42,9 @@ private:
     void HandleLocalRead(LocalOp* op) override;
     void HandleLocalSetAuxData(LocalOp* op) override;
 
-    void HandleRemoteRead(const protocol::SharedLogMessage& request) override;
+    void HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::StorageShard* storage_shard);
+    void ProcessLocalIndexMisses(const Index::QueryResultVec& miss_results, uint32_t logspace_id);
+
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
@@ -52,7 +54,7 @@ private:
     void OnRecvRegistrationResponse(const protocol::SharedLogMessage& message) override;
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
-    void ProcessIndexQueryResults(const Index::QueryResultVec& results);
+    void ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* not_found_results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
