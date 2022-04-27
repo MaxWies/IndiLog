@@ -327,9 +327,8 @@ private:
 
 class EngineConnection {
 public:
-    EngineConnection(size_t storage_replication, size_t num_storage_shards) : 
-        storage_replication_(storage_replication),
-        num_storage_shards_(num_storage_shards),
+    EngineConnection(size_t num_storage_nodes) : 
+        num_storage_nodes_(num_storage_nodes),
         local_start_id_(0),
         sequencer_node_(0),
         sequencer_node_set_(false)
@@ -350,7 +349,7 @@ public:
     }
 
     bool StorageNodesReady(){
-        return storage_nodes_.size() == num_storage_shards_ * storage_replication_;
+        return storage_nodes_.size() == num_storage_nodes_;
     }
 
     bool IsReady(){
@@ -362,8 +361,7 @@ public:
     }
 
 private:
-    size_t storage_replication_;
-    size_t num_storage_shards_;
+    size_t num_storage_nodes_;
     uint32_t local_start_id_;
 
     absl::flat_hash_set<uint16_t> storage_nodes_;
@@ -418,14 +416,14 @@ public:
         return true;
     }
 
-    void CreateEngineConnection(uint32_t logspace, size_t storage_replication, size_t num_storage_shards){
+    void CreateEngineConnection(uint32_t logspace, size_t num_storage_nodes){
         if(engine_connections_.contains(logspace)){
             // todo: is that ok?
             engine_connections_.erase(logspace);
         }
         engine_connections_.insert({
             logspace,
-            new EngineConnection(storage_replication, num_storage_shards)
+            new EngineConnection(num_storage_nodes)
         });
     }
 

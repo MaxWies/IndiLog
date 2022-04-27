@@ -17,6 +17,8 @@
 namespace faas {
 namespace engine {
 
+using node::NodeType;
+
 using protocol::FuncCall;
 using protocol::FuncCallHelper;
 using protocol::Message;
@@ -32,7 +34,7 @@ using server::EgressHub;
 using server::NodeWatcher;
 
 Engine::Engine(uint16_t node_id)
-    : ServerBase(fmt::format("engine_{}", node_id)),
+    : ServerBase(node_id, fmt::format("engine_{}", node_id), NodeType::kEngineNode),
       engine_tcp_port_(-1),
       enable_shared_log_(false),
       node_id_(node_id),
@@ -119,8 +121,8 @@ void Engine::SetupLocalIpc() {
     ListenForNewConnections(ipc_sockfd_, absl::bind_front(&Engine::OnNewLocalIpcConn, this));
 }
 
-void Engine::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    if (node_type == NodeWatcher::kGatewayNode) {
+void Engine::OnNodeOnline(NodeType node_type, uint16_t node_id) {
+    if (node_type == NodeType::kGatewayNode) {
         SetupGatewayEgress();
     }
 }

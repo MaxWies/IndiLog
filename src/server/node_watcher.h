@@ -1,6 +1,7 @@
 #pragma once
 
 #include "base/common.h"
+#include "common/node.h"
 #include "common/protocol.h"
 #include "common/zk.h"
 #include "common/zk_utils.h"
@@ -16,33 +17,16 @@ public:
 
     void StartWatching(zk::ZKSession* session);
 
-    enum NodeType {
-        kGatewayNode   = 0,
-        kEngineNode    = 1,
-        kSequencerNode = 2,
-        kStorageNode   = 3,
-        kIndexNode     = 4,
-        kTotalNodeType = 5
-    };
-
-    using NodeEventCallback = std::function<void(NodeType /* node_type */, uint16_t node_id)>;
+    using NodeEventCallback = std::function<void(node::NodeType /* node_type */, uint16_t node_id)>;
     void SetNodeOnlineCallback(NodeEventCallback cb);
     void SetNodeOfflineCallback(NodeEventCallback cb);
 
-    bool GetNodeAddr(NodeType node_type, uint16_t node_id, struct sockaddr_in* addr);
+    bool GetNodeAddr(node::NodeType node_type, uint16_t node_id, struct sockaddr_in* addr);
 
-    static NodeType GetSrcNodeType(protocol::ConnType conn_type);
-    static NodeType GetDstNodeType(protocol::ConnType conn_type);
+    static node::NodeType GetSrcNodeType(protocol::ConnType conn_type);
+    static node::NodeType GetDstNodeType(protocol::ConnType conn_type);
 
 private:
-    static constexpr const char* kNodeTypeStr[] = {
-        "GatewayNode",
-        "EngineNode",
-        "SequencerNode",
-        "StorageNode",
-        "IndexNode"
-    };
-
     std::optional<zk_utils::DirWatcher> watcher_;
 
     NodeEventCallback node_online_cb_;
@@ -50,9 +34,9 @@ private:
 
     absl::Mutex mu_;
     absl::flat_hash_map</* node_id */ uint16_t, struct sockaddr_in>
-        node_addr_[kTotalNodeType] ABSL_GUARDED_BY(mu_);
+        node_addr_[node::NodeType::kTotalNodeType] ABSL_GUARDED_BY(mu_);
 
-    bool ParseNodePath(std::string_view path, NodeType* node_type, uint16_t* node_id);
+    bool ParseNodePath(std::string_view path, node::NodeType* node_type, uint16_t* node_id);
 
     void OnZNodeCreated(std::string_view path, std::span<const char> contents);
     void OnZNodeChanged(std::string_view path, std::span<const char> contents);

@@ -16,9 +16,13 @@
 namespace faas {
 namespace server {
 
-ServerBase::ServerBase(std::string_view node_name)
+using node::NodeType;
+
+ServerBase::ServerBase(uint16_t node_id, std::string_view node_name, NodeType node_type)
     : state_(kCreated),
+      node_id_(node_id),
       node_name_(node_name),
+      node_type_(node_type),
       stop_eventfd_(eventfd(0, EFD_CLOEXEC)),
       message_sockfd_(-1),
       event_loop_thread_("Srv/EL",
@@ -41,7 +45,18 @@ void ServerBase::Start() {
     state_.store(kBootstrapping);
     StartInternal();
     SetupMessageServer();
+    // todo: improve
+    if(!absl::StartsWith(node_name_, "gateway"))
+    {
+        node_watcher_.SetNodeOfflineCallback(
+            absl::bind_front(&ServerBase::OnNodeOffline, this)
+        );
+        scale_watcher_.SetNodeScaledCallback(
+            absl::bind_front(&ServerBase::OnNodeScaled, this)
+        );
+    }
     node_watcher_.StartWatching(zk_session());
+    scale_watcher_.StartWatching(zk_session());
     // Start thread for running event loop
     event_loop_thread_.Start();
     state_.store(kRunning);
@@ -296,6 +311,33 @@ void ServerBase::CreatePeriodicTimer(int timer_type, absl::Duration interval,
         timers_.insert(std::unique_ptr<Timer>(timer));
         initial += interval;
     });
+}
+
+void ServerBase::CreateOnceTimer(int timer_type, absl::Duration trigger, IOWorker* io_worker, Timer::Callback cb) {
+    Timer* timer = new Timer(timer_type, cb);
+    timer->SetOnce(trigger);
+    RegisterConnection(io_worker, timer);
+    timers_.insert(std::unique_ptr<Timer>(timer));
+}
+
+void ServerBase::OnNodeScaled(ScaleWatcher::ScaleOp scale_op, NodeType node_type, uint16_t node_id) {
+    if (scale_op == ScaleWatcher::ScaleOp::kScaleOut){
+        
+    } else if (scale_op == ScaleWatcher::ScaleOp::kScaleIn){
+        if (node_type == node_type_ && node_id == node_id_){
+            CreateOnceTimer(
+                kGracePeriodTimerId,
+                absl::Seconds(absl::GetFlag(FLAGS_scale_in_grace_period_s)),
+                this->SomeIOWorker(),
+                [this] () {
+                    this->DoStop();
+                }
+            );
+            HLOG_F(INFO, "Grace period for my node {} started", node_id_);
+        }
+    } else {
+        UNREACHABLE();
+    }
 }
 
 namespace {

@@ -16,13 +16,15 @@
 namespace faas {
 namespace gateway {
 
+using node::NodeType;
+
 using protocol::FuncCall;
 using protocol::FuncCallHelper;
 using protocol::GatewayMessage;
 using protocol::GatewayMessageHelper;
 
-Server::Server()
-    : ServerBase("gateway"),
+Server::Server(uint16_t node_id)
+    : ServerBase(node_id, "gateway", NodeType::kGatewayNode),
       http_port_(-1),
       grpc_port_(-1),
       http_sockfd_(-1),
@@ -67,6 +69,9 @@ void Server::StartInternal() {
         absl::bind_front(&NodeManager::OnNodeOnline, &node_manager_));
     node_watcher()->SetNodeOfflineCallback(
         absl::bind_front(&NodeManager::OnNodeOffline, &node_manager_));
+    // Setup callback for scale watcher
+    scale_watcher()->SetNodeScaledCallback(
+        absl::bind_front(&NodeManager::OnNodeScaled, &node_manager_));
     // Start background thread
     background_thread_.Start();
 }
@@ -135,6 +140,7 @@ void Server::SetupGrpcServer() {
 void Server::OnNewHttpFuncCall(HttpConnection* connection, FuncCallContext* func_call_context) {
     auto func_entry = func_config_.find_by_func_name(func_call_context->func_name());
     if (func_entry == nullptr) {
+        HLOG_F(WARNING, "Function {} not found", func_call_context->func_name());
         func_call_context->set_status(FuncCallContext::kNotFound);
         connection->OnFuncCallFinished(func_call_context);
         return;
@@ -181,6 +187,18 @@ void Server::OnEngineNodeOnline(uint16_t node_id) {
 void Server::OnEngineNodeOffline(uint16_t node_id) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "Engine node {} is offline", node_id);
+    int egress_hub_id = GetEgressHubTypeId(protocol::ConnType::GATEWAY_TO_ENGINE, node_id);
+    ForEachIOWorker([&] (server::IOWorker* io_worker) {
+        server::EgressHub* egress_hub = io_worker->PickConnectionAs<server::EgressHub>(egress_hub_id);
+        if(egress_hub != nullptr){
+            HLOG(INFO) << "Close egress hub of offline node...";
+            io_worker->ScheduleFunction(nullptr, [egress_hub = egress_hub]{
+                egress_hub->ScheduleClose();
+            });
+            return;
+        }
+        HLOG(INFO) << "This IOWorker had no egress connection for this node";
+    });
 }
 
 void Server::TryDispatchingPendingFuncCalls() {
@@ -426,6 +444,7 @@ bool Server::DispatchFuncCall(std::shared_ptr<server::ConnectionBase> parent_con
     dispatch_message.payload_size = gsl::narrow_cast<uint32_t>(func_call_context->input().size());
     bool success = SendMessageToEngine(node_id, dispatch_message, func_call_context->input());
     if (!success) {
+        HLOG_F(WARNING, "Could not dispatch message to engine {}", node_id);
         node_manager_.FuncCallFinished(func_call, node_id);
         func_call_context->set_status(FuncCallContext::kNotFound);
         FinishFuncCall(std::move(parent_connection), func_call_context);
@@ -440,6 +459,7 @@ bool Server::DispatchAsyncFuncCall(const FuncCall& func_call, uint32_t logspace,
     dispatch_message.payload_size = gsl::narrow_cast<uint32_t>(input.size());
     bool success = SendMessageToEngine(node_id, dispatch_message, input);
     if (!success) {
+        HLOG_F(WARNING, "Could not dispatch async message to engine {}", node_id);
         node_manager_.FuncCallFinished(func_call, node_id);
     }
     return success;
@@ -553,7 +573,8 @@ void Server::OnNewGrpcConnection(int sockfd) {
 server::EgressHub* Server::CreateEngineEgressHub(uint16_t node_id, 
                                                  server::IOWorker* io_worker) {
     struct sockaddr_in addr;
-    if (!node_watcher()->GetNodeAddr(server::NodeWatcher::kEngineNode, node_id, &addr)) {
+    if (!node_watcher()->GetNodeAddr(NodeType::kEngineNode, node_id, &addr)) {
+        HVLOG_F(1, "Node watcher has no engine node {}", node_id);
         return nullptr;
     }
     auto egress_hub = std::make_unique<server::EgressHub>(

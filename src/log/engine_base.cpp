@@ -21,6 +21,12 @@ using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
 using protocol::SharedLogResultType;
 
+using server::IOWorker;
+using server::ConnectionBase;
+using server::IngressConnection;
+using server::EgressHub;
+using server::NodeWatcher;
+
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
@@ -45,8 +51,16 @@ void EngineBase::Stop() {}
 
 void EngineBase::SetupZKWatchers() {
     view_watcher_.SetViewCreatedCallback(
-        [this] (const View* view) {
-            this->OnViewCreated(view);
+        [this, base_engine = engine_] (const View* view) {
+            auto my_engine = this;
+            base_engine->CreateOnceTimer(
+                kRegistrationTimerId,
+                absl::Seconds(1),
+                base_engine->SomeIOWorker(),
+                [my_engine = my_engine, view = view] () {
+                    my_engine->OnViewCreated(view);
+                }
+            );
         }
     );
     view_watcher_.SetViewFrozenCallback(
@@ -399,6 +413,7 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
             return true;
         }
     }
+    HLOG_F(ERROR, "Failed to send registration request to sequencer={}", destination_id);
     return false;
 }
 

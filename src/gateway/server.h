@@ -20,7 +20,7 @@ namespace gateway {
 
 class Server final : public server::ServerBase {
 public:
-    Server();
+    Server(uint16_t node_id);
     ~Server();
 
     void set_http_port(int port) { http_port_ = port; }

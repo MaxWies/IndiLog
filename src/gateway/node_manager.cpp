@@ -8,7 +8,10 @@
 namespace faas {
 namespace gateway {
 
+using node::NodeType;
+
 using server::NodeWatcher;
+using server::ScaleWatcher;
 
 NodeManager::NodeManager(Server* server)
     : server_(server),
@@ -49,18 +52,20 @@ bool NodeManager::PickNodeForNewFuncCall(const protocol::FuncCall& func_call, ui
 void NodeManager::FuncCallFinished(const protocol::FuncCall& func_call, uint16_t node_id) {
     absl::MutexLock lk(&mu_);
     if (!running_requests_.contains(func_call.full_call_id)) {
+        HLOG(WARNING) << "There is no request for this function call anymore";
         return;
     }
     running_requests_.erase(func_call.full_call_id);
     if (!connected_nodes_.contains(node_id)) {
+        HLOG(WARNING) << "The node does no exist anymore";
         return;
     }
     Node* node = connected_nodes_[node_id].get();
     node->inflight_requests--;
 }
 
-void NodeManager::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    if (node_type != NodeWatcher::kEngineNode) {
+void NodeManager::OnNodeOnline(NodeType node_type, uint16_t node_id) {
+    if (node_type != NodeType::kEngineNode) {
         return;
     }
     std::unique_ptr<Node> node = std::make_unique<Node>(node_id);
@@ -77,13 +82,15 @@ void NodeManager::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id
     server_->OnEngineNodeOnline(node_id);
 }
 
-void NodeManager::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    if (node_type != NodeWatcher::kEngineNode) {
+void NodeManager::OnNodeOffline(NodeType node_type, uint16_t node_id) {
+    if (node_type != NodeType::kEngineNode) {
         return;
     }
     {
         absl::MutexLock lk(&mu_);
-        DCHECK(connected_nodes_.contains(node_id));
+        if (!connected_nodes_.contains(node_id)){
+            HLOG_F(INFO, "Engine node {} already removed", node_id);
+        }
         connected_nodes_.erase(node_id);
         connected_node_list_.clear();
         for (auto& entry : connected_nodes_) {
@@ -94,6 +101,21 @@ void NodeManager::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_i
         HLOG_F(INFO, "{} nodes connected", connected_nodes_.size());
     }
     server_->OnEngineNodeOffline(node_id);
+}
+
+void NodeManager::OnNodeScaled(ScaleWatcher::ScaleOp scale_op, NodeType node_type, uint16_t node_id){
+    if (node_type != NodeType::kEngineNode){
+        return;
+    }
+    if (scale_op == ScaleWatcher::ScaleOp::kScaleOut){
+        
+    } else if (scale_op == ScaleWatcher::ScaleOp::kScaleIn){
+        absl::MutexLock lk(&mu_);
+        connected_nodes_.erase(node_id);
+        HLOG_F(INFO, "Node {} will not get new function requests", node_id);
+    } else {
+        UNREACHABLE();
+    }
 }
 
 NodeManager::Node::Node(uint16_t node_id)

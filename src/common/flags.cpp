@@ -14,3 +14,5 @@ ABSL_FLAG(bool, tcp_enable_keepalive, true, "Enable TCP keep-alive");
 
 ABSL_FLAG(std::string, zookeeper_host, "localhost:2181", "ZooKeeper host");
 ABSL_FLAG(std::string, zookeeper_root_path, "/faas", "Root path for all znodes");
+
+ABSL_FLAG(int, scale_in_grace_period_s, 30, "");

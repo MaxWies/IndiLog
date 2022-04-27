@@ -1,7 +1,10 @@
 #include "base/init.h"
 #include "base/common.h"
 #include "gateway/server.h"
+#include "utils/env_variables.h"
 
+ABSL_FLAG(int, node_id, -1,
+          "My node ID. Also settable through environment variable FAAS_NODE_ID.");
 ABSL_FLAG(int, http_port, 8080, "Port for HTTP connections");
 ABSL_FLAG(int, grpc_port, 50051, "Port for gRPC connections");
 ABSL_FLAG(std::string, func_config_file, "", "Path to function config file");
@@ -20,7 +23,15 @@ void GatewayMain(int argc, char* argv[]) {
     base::InitMain(argc, argv);
     base::SetInterruptHandler(StopServerHandler);
 
-    auto server = std::make_unique<gateway::Server>();
+    int node_id = absl::GetFlag(FLAGS_node_id);
+    if (node_id == -1) {
+        node_id = utils::GetEnvVariableAsInt("FAAS_NODE_ID", -1);
+    }
+    if (node_id == -1) {
+        LOG(FATAL) << "Node ID not set!";
+    }
+
+    auto server = std::make_unique<gateway::Server>(node_id);
     server->set_http_port(absl::GetFlag(FLAGS_http_port));
     server->set_grpc_port(absl::GetFlag(FLAGS_grpc_port));
     server->set_func_config_file(absl::GetFlag(FLAGS_func_config_file));

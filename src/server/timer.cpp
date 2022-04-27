@@ -10,6 +10,7 @@ namespace server {
 Timer::Timer(int timer_type, Callback cb)
     : ConnectionBase(timer_type),
       periodic_(false),
+      once_(false),
       cb_(cb),
       io_worker_(nullptr),
       state_(kCreated),
@@ -25,6 +26,12 @@ void Timer::SetPeriodic(absl::Time initial, absl::Duration interval) {
     periodic_ = true;
     initial_ = initial;
     interval_ = interval;
+}
+
+void Timer::SetOnce(absl::Duration trigger) {
+    DCHECK(!once_ && state_ == kCreated);
+    once_ = true;
+    interval_ = trigger;
 }
 
 void Timer::Start(server::IOWorker* io_worker) {
@@ -43,6 +50,9 @@ void Timer::Start(server::IOWorker* io_worker) {
         }
         CHECK(io_utils::SetupTimerFdPeriodic(timerfd_, initial_duration, interval_));
         state_ = kScheduled;
+    }
+    if(once_){
+        TriggerIn(interval_);
     }
     URING_DCHECK_OK(current_io_uring()->StartRead(
         timerfd_, kOctaBufGroup,

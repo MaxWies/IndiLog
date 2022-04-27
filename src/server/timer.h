@@ -13,6 +13,7 @@ public:
     ~Timer();
 
     void SetPeriodic(absl::Time initial, absl::Duration interval);
+    void SetOnce(absl::Duration trigger);
 
     void Start(IOWorker* io_worker) override;
     void ScheduleClose() override;
@@ -23,6 +24,7 @@ private:
     enum State { kCreated, kIdle, kScheduled, kClosing, kClosed };
 
     bool periodic_;
+    bool once_;
     absl::Time initial_;
     absl::Duration interval_;
 

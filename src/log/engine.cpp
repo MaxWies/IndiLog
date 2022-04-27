@@ -4,6 +4,7 @@
 #include "log/flags.h"
 #include "utils/bits.h"
 #include "utils/random.h"
+#include "server/constants.h"
 
 namespace faas {
 namespace log {
@@ -14,6 +15,12 @@ using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
 using protocol::SharedLogResultType;
+
+using server::IOWorker;
+using server::ConnectionBase;
+using server::IngressConnection;
+using server::EgressHub;
+using server::NodeWatcher;
 
 Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
@@ -32,24 +39,47 @@ void Engine::OnViewCreated(const View* view) {
             if (!view->is_active_phylog(sequencer_id)) {
                 continue;
             }
-            HLOG_F(INFO, "Start registration at sequencer_node={}", sequencer_id);
             view_mutable_.CreateEngineConnection(
                 bits::JoinTwo16(view->id(), sequencer_id), 
-                view->userlog_replicas(), 
-                view->num_local_storage_shards()
+                view->num_storage_nodes()
             );
-            //TODO: give engine shard identifier
-            SomeIOWorker()->ScheduleFunction(
-                nullptr, [this, view_id = view->id(), sequencer_id = sequencer_id, shard_id = my_node_id(), engine_id = my_node_id()] () {
-                    SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterMessage(
-                        view_id, 
-                        sequencer_id, 
-                        shard_id,
-                        engine_id
-                    );
-                    SendRegistrationRequest(sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
-                }
+            // apply for shard
+            std::string znode_path_shard_req = fmt::format("storage_shard_req/{}_{}_{}", view->id(), sequencer_id, my_node_id());
+            std::string znode_path_shard_resp = fmt::format("storage_shard_resp/{}_{}_{}", view->id(), sequencer_id, my_node_id());
+            auto status = zk_utils::CreateSync(
+                zk_session(), znode_path_shard_req, "", zk::ZKCreateMode::kEphemeral, nullptr
             );
+            CHECK(status.ok()) << fmt::format("Failed to create ZooKeeper node {}: {}",
+                                      znode_path_shard_req, status.ToString());
+            std::string value;
+            zk_utils::GetOrWaitSync(zk_session(), znode_path_shard_resp, &value);
+            HVLOG_F(1, "Received from znode {} content {}", znode_path_shard_resp, value);
+            std::string_view prefix;
+            if (absl::StartsWith(value, "ok:")){
+                prefix = "ok:";
+            } else if (absl::StartsWith(value, "err:")){
+                HLOG_F(ERROR, "Getting shard id failed for log {}", sequencer_id);
+                return;
+            } else {
+                UNREACHABLE();
+            }
+            int parsed;
+            uint16_t shard_id;
+            if (!absl::SimpleAtoi(absl::StripPrefix(value, prefix), &parsed)) {
+                HLOG(ERROR) << "Failed to parse value: " << value;
+                return;
+            }
+            shard_id = gsl::narrow_cast<uint16_t>(parsed);
+            HLOG_F(INFO, "Received shard id {} from controller for sequencer {}. Start registration", shard_id, sequencer_id);
+            // clean zk
+            zk_utils::DeleteSync(zk_session(), znode_path_shard_resp);
+            SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterMessage(
+                view->id(), 
+                sequencer_id, 
+                shard_id,
+                my_node_id()
+            );
+            SendRegistrationRequest(sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
         }
         current_view_ = view;
         views_.push_back(view);
@@ -254,11 +284,13 @@ void Engine::HandleLocalRead(LocalOp* op) {
     uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
     if(!view_mutable_.GetMyStorageShards().contains(logspace_id)){
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
+        return;
     }
     onging_reads_.PutChecked(op->id, op);
     ONHOLD_IF_SEEN_FUTURE_VIEW(op);
     if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
         HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+        return;
     }
     //TODO:local indexing
     LockablePtr<Index> index_ptr;
@@ -286,12 +318,12 @@ void Engine::HandleLocalRead(LocalOp* op) {
             locked_index->PollQueryResults(&query_results);
         }
         ProcessIndexQueryResults(query_results, &local_index_misses);
+        if(!local_index_misses.empty()){
+            ProcessLocalIndexMisses(local_index_misses, logspace_id);
+        }
     } else {
         HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
         HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
-    }
-    if(!local_index_misses.empty()){
-        ProcessLocalIndexMisses(local_index_misses, logspace_id);
     }
 }
 
@@ -501,7 +533,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
     uint32_t logspace_id = bits::JoinTwo16(received_message.view_id, received_message.sequencer_id);
     if (result == protocol::SharedLogResultType::REGISTER_SEQUENCER_OK){
         DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
-        HLOG_F(INFO, "Registered at sequencer_noded={} with shard_id={}", 
+        HLOG_F(INFO, "Registered at sequencer_node={} and blocked shard_id={}", 
             received_message.origin_node_id, received_message.shard_id);
         if(view_mutable_.UpdateSequencerConnection(logspace_id, received_message.origin_node_id, received_message.local_start_id)){
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(SharedLogResultType::REGISTER_ENGINE,
@@ -509,18 +541,18 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             );
             const View::NodeIdVec storage_node_ids = current_view_->GetStorageNodes();
             for(uint16_t storage_node_id : storage_node_ids){
-                HVLOG_F(1, "Register at storage node. engine_node={}, storage_node={}, view_id={}, sequencer_id={}",
-                    my_node_id(), storage_node_id, current_view_->id(), received_message.sequencer_id);
+                HVLOG_F(1, "Send registration request to storage node. engine_node={}, storage_node={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
+                    my_node_id(), storage_node_id, current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.local_start_id);
                 SendRegistrationRequest(storage_node_id, protocol::ConnType::ENGINE_TO_STORAGE, &request);
             }
         }
     }
     else if(result == protocol::SharedLogResultType::REGISTER_STORAGE_OK){
-        HLOG_F(INFO, "Registered at storage node. storeage_node={}, sequencer_id={}, storage_shard_id{}, engine_id={}", 
+        HLOG_F(INFO, "Registered at storage node. storage_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
             // unblock at sequencer
-            HLOG(INFO) << "Registered at all storage nodes. Register at sequencer node";
+            HLOG(INFO) << "Registered at all storage nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.shard_id, received_message.engine_node_id,
@@ -535,12 +567,12 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         HLOG_F(INFO, "Registration finished for sequencer_node={}, unblocked shard_id={}, local_start_id={}", 
             received_message.origin_node_id, received_message.shard_id, received_message.local_start_id
         );
-        const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, my_node_id()));
+        const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id));
         view_mutable_.UpdateMyStorageShards(logspace_id, storage_shard);
         uint32_t local_start_id = view_mutable_.GetLocalStartOfConnection(received_message.logspace_id);
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
-        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(my_node_id(), current_view_, received_message.sequencer_id, received_message.local_start_id));
+        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, received_message.local_start_id));
         index_collection_.InstallLogSpace(std::make_unique<Index>(current_view_, received_message.sequencer_id));
         // run ready requests
         std::vector<SharedLogRequest> ready_requests;

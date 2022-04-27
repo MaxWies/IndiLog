@@ -88,6 +88,8 @@ private:
                          /* end_seqnum */ uint32_t>> cuts_;
     uint32_t indexed_metalog_position_;
 
+    bool first_index_data_; // for local indexing
+
     // for index tier
     size_t number_storage_shards_;
     absl::flat_hash_map<uint32_t /* metalog_position */, absl::flat_hash_set<uint16_t>> storage_shards_index_updates_;

@@ -9,6 +9,8 @@
 namespace faas {
 namespace log {
 
+using node::NodeType;
+
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
@@ -20,7 +22,7 @@ using server::EgressHub;
 using server::NodeWatcher;
 
 IndexBase::IndexBase(uint16_t node_id)
-    : ServerBase(fmt::format("index_{}", node_id)),
+    : ServerBase(node_id, fmt::format("index_{}", node_id), NodeType::kIndexNode),
       node_id_(node_id) {}
       //   db_(nullptr),
       //background_thread_("BG", [this] { this->BackgroundThreadMain(); }) 

@@ -3,6 +3,9 @@
 namespace faas {
 namespace server {
 
+using node::NodeType;
+using node::kNodeTypeStr;
+
 NodeWatcher::NodeWatcher() {}
 
 NodeWatcher::~NodeWatcher() {}
@@ -39,23 +42,23 @@ bool NodeWatcher::GetNodeAddr(NodeType node_type, uint16_t node_id,
 bool NodeWatcher::ParseNodePath(std::string_view path,
                                 NodeType* node_type, uint16_t* node_id) {
     if (path == "gateway") {
-        *node_type = kGatewayNode;
+        *node_type = NodeType::kGatewayNode;
         *node_id = 0;
         return true;
     }
     std::string_view prefix;
     if (absl::StartsWith(path, "engine_")) {
         prefix = "engine_";
-        *node_type = kEngineNode;
+        *node_type = NodeType::kEngineNode;
     } else if (absl::StartsWith(path, "sequencer_")) {
         prefix = "sequencer_";
-        *node_type = kSequencerNode;
+        *node_type = NodeType::kSequencerNode;
     } else if (absl::StartsWith(path, "storage_")) {
         prefix = "storage_";
-        *node_type = kStorageNode;
+        *node_type = NodeType::kStorageNode;
     } else if (absl::StartsWith(path, "index_")) {
         prefix = "index_";
-        *node_type = kIndexNode;
+        *node_type = NodeType::kIndexNode;
     } else {
         LOG(ERROR) << "Unknown type of node: " << path;
         return false;
@@ -103,6 +106,7 @@ void NodeWatcher::OnZNodeDeleted(std::string_view path) {
         CHECK(node_addr_[node_type].contains(node_id))
             << fmt::format("{} {} does not exist", kNodeTypeStr[node_type], node_id);
         node_addr_[node_type].erase(node_id);
+        LOG_F(INFO, "znode {} left", node_id);
     }
     if (node_offline_cb_) {
         node_offline_cb_(node_type, node_id);
@@ -111,8 +115,8 @@ void NodeWatcher::OnZNodeDeleted(std::string_view path) {
 
 namespace {
 using protocol::ConnType;
-typedef std::pair<NodeWatcher::NodeType, NodeWatcher::NodeType> NodeTypePair;
-#define NODE_PAIR(A, B) { NodeWatcher::k##A##Node, NodeWatcher::k##B##Node }
+typedef std::pair<NodeType, NodeType> NodeTypePair;
+#define NODE_PAIR(A, B) { NodeType::k##A##Node, NodeType::k##B##Node }
 
 const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::GATEWAY_TO_ENGINE,      NODE_PAIR(Gateway, Engine) },
@@ -136,12 +140,12 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
 
 }  // namespace
 
-NodeWatcher::NodeType NodeWatcher::GetSrcNodeType(protocol::ConnType conn_type) {
+NodeType NodeWatcher::GetSrcNodeType(protocol::ConnType conn_type) {
     CHECK(kNodeTypeTable.contains(conn_type));
     return kNodeTypeTable.at(conn_type).first;
 }
 
-NodeWatcher::NodeType NodeWatcher::GetDstNodeType(protocol::ConnType conn_type) {
+NodeType NodeWatcher::GetDstNodeType(protocol::ConnType conn_type) {
     CHECK(kNodeTypeTable.contains(conn_type));
     return kNodeTypeTable.at(conn_type).second;
 }

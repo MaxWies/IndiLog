@@ -99,6 +99,8 @@ private:
                                        uint16_t dst_node_id,
                                        server::IOWorker* io_worker);
 
+    void OnNodeOffline(node::NodeType node_type, uint16_t node_id) override;
+
     DISALLOW_COPY_AND_ASSIGN(StorageBase);
 };
 

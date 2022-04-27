@@ -242,7 +242,7 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
     if (registration_failed){
         HLOG(WARNING) << "Registration failed";
         SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
-            SharedLogResultType::REGISTER_SEQUENCER_FAILED,
+            SharedLogResultType::REGISTER_STORAGE_FAILED,
             current_view_->id(),
             received_message.sequencer_id,
             received_message.shard_id,
@@ -255,7 +255,7 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
     uint32_t global_storage_shard_id = bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id);
     if(current_view_->GetStorageNode(my_node_id())->IsStorageShardMember(global_storage_shard_id)){
         // discard pending entries
-        HLOG_F(INFO, "Storage node is append target, discard pending entries. global_storage_shard_id={}, engine_id={}", global_storage_shard_id, received_message.engine_node_id);
+        HLOG_F(INFO, "Storage node is append target, discard pending entries. global_storage_shard_id={}, engine_id={}", bits::HexStr0x(global_storage_shard_id), received_message.engine_node_id);
         auto storage_ptr = storage_collection_.GetLogSpaceChecked(received_message.logspace_id);
         {
             auto locked_storage = storage_ptr.Lock();
@@ -266,7 +266,7 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
     }
     // occupation necessary for index updates
     view_mutable_.PutStorageShardOccupation(global_storage_shard_id, received_message.engine_node_id);
-    HLOG_F(INFO, "Occupy shard for engine and send registration ok. global_storage_shard_id={}, engine_id={}", global_storage_shard_id, received_message.engine_node_id);
+    HLOG_F(INFO, "Occupy shard for engine and send registration ok. global_storage_shard_id={}, engine_id={}", bits::HexStr0x(global_storage_shard_id), received_message.engine_node_id);
     SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
             SharedLogResultType::REGISTER_STORAGE_OK,
             received_message.view_id,

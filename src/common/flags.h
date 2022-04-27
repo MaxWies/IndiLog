@@ -22,3 +22,5 @@ ABSL_DECLARE_FLAG(bool, tcp_enable_keepalive);
 
 ABSL_DECLARE_FLAG(std::string, zookeeper_host);
 ABSL_DECLARE_FLAG(std::string, zookeeper_root_path);
+
+ABSL_DECLARE_FLAG(int, scale_in_grace_period_s);

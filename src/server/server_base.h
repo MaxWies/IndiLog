@@ -1,11 +1,13 @@
 #pragma once
 
 #include "base/common.h"
+#include "common/node.h"
 #include "common/zk.h"
 #include "common/protocol.h"
 #include "utils/appendable_buffer.h"
 #include "server/io_worker.h"
 #include "server/node_watcher.h"
+#include "server/scale_watcher.h"
 #include "server/timer.h"
 
 namespace faas {
@@ -15,7 +17,7 @@ class ServerBase {
 public:
     static constexpr size_t kDefaultIOWorkerBufferSize = 65536;
 
-    explicit ServerBase(std::string_view node_name);
+    explicit ServerBase(uint16_t node_id, std::string_view node_name, node::NodeType node_type);
     virtual ~ServerBase();
 
     void Start();
@@ -26,8 +28,15 @@ protected:
     enum State { kCreated, kBootstrapping, kRunning, kStopping, kStopped };
     std::atomic<State> state_;
 
+    uint16_t my_node_id() const { return node_id_; }
+    node::NodeType my_node_type() const { return node_type_; }
+
     zk::ZKSession* zk_session() { return &zk_session_; }
     NodeWatcher* node_watcher() { return &node_watcher_; }
+    ScaleWatcher* scale_watcher() { return &scale_watcher_; }
+
+    virtual void OnNodeOffline(node::NodeType node_type, uint16_t node_id) {}
+    void OnNodeScaled(ScaleWatcher::ScaleOp scale_op, node::NodeType node_type, uint16_t node_id);
 
     bool WithinMyEventLoopThread() const;
 
@@ -45,6 +54,7 @@ protected:
 
     Timer* CreateTimer(int timer_type, IOWorker* io_worker, Timer::Callback cb);
     void CreatePeriodicTimer(int timer_type, absl::Duration interval, Timer::Callback cb);
+    void CreateOnceTimer(int timer_type, absl::Duration trigger, IOWorker* io_worker, Timer::Callback cb);
 
     // Supposed to be implemented by sub-class
     virtual void StartInternal() = 0;
@@ -57,13 +67,16 @@ protected:
     static int GetEgressHubTypeId(protocol::ConnType conn_type, uint16_t node_id);
 
 private:
+    const uint16_t node_id_; 
     std::string node_name_;
+    node::NodeType node_type_;
 
     int stop_eventfd_;
     int message_sockfd_;
     base::Thread event_loop_thread_;
     zk::ZKSession zk_session_;
     NodeWatcher node_watcher_;
+    ScaleWatcher scale_watcher_;
 
     mutable std::atomic<size_t> next_io_worker_for_pick_;
 

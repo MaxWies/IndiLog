@@ -14,7 +14,8 @@ namespace log {
 class Controller {
 public:
     static constexpr size_t kDefaultNumReplicas = 3;
-    static constexpr size_t kDefaultNumShards = 1; // master only
+    static constexpr size_t kDefaultNumIndexShards = 1;
+    static constexpr size_t kDefaultMaxNumStorageShards = 4;
 
     explicit Controller(uint32_t random_seed);
     ~Controller();
@@ -24,6 +25,7 @@ public:
     void set_index_replicas(size_t value) { index_replicas_ = value; }
     void set_index_shards(size_t value) { index_shards_ = value; }
     void set_num_phylogs(size_t value) { num_phylogs_ = value; }
+    void set_max_num_storage_shards(size_t value) { max_num_storage_shards_ = value; }
 
     void Start();
     void ScheduleStop();
@@ -39,6 +41,7 @@ private:
     size_t index_replicas_;
     size_t index_shards_;
     size_t num_phylogs_;
+    size_t max_num_storage_shards_;
 
     State state_;
 
@@ -46,17 +49,22 @@ private:
     server::NodeWatcher node_watcher_;
     std::optional<zk_utils::DirWatcher> cmd_watcher_;
     std::optional<zk_utils::DirWatcher> freeze_watcher_;
+    std::optional<zk_utils::DirWatcher> storage_shard_watcher_;
 
     uint64_t log_space_hash_seed_;
     std::vector<uint32_t> log_space_hash_tokens_;
 
     std::set</* node_id */ uint16_t> sequencer_nodes_;
-    std::set</* node_id */ uint16_t> engine_nodes_;
     std::set</* node_id */ uint16_t> storage_nodes_;
     std::set</* node_id */ uint16_t> index_nodes_;
 
+    std::set</* node_id */ uint16_t> current_engine_nodes_;
+
     std::vector<std::unique_ptr<View>> views_;
-    ViewMutable* view_mutable_;
+
+    absl::Mutex storage_shard_mu_;
+    absl::flat_hash_map<uint16_t, absl::FixedArray<bool>> storage_shard_occupation_ ABSL_GUARDED_BY(storage_shard_mu_);
+    absl::flat_hash_map<uint16_t, absl::flat_hash_map<uint16_t, uint16_t>> storage_shard_holder_ ABSL_GUARDED_BY(storage_shard_mu_);
 
     using NodeIdVec = std::vector<uint16_t>;
     struct Configuration {
@@ -65,7 +73,6 @@ private:
 
         size_t    num_phylogs;
         NodeIdVec sequencer_nodes;
-        NodeIdVec engine_nodes;
         NodeIdVec storage_nodes;
         NodeIdVec index_nodes;
     };
@@ -92,16 +99,15 @@ private:
     void FreezeView(const View* view);
 
     void CreateStorageShardZNodes(const Configuration& configuration);
-    void ResetStorageShardOccupation(const Configuration& configuration);
-    void OnStorageShardRequest(uint16_t node_id);
 
     std::optional<FinalizedViewProto> CheckAllSealed(const OngoingSeal& seal);
 
-    void OnNodeOnline(server::NodeWatcher::NodeType node_type, uint16_t node_id);
-    void OnNodeOffline(server::NodeWatcher::NodeType node_type, uint16_t node_id);
+    void OnNodeOnline(node::NodeType node_type, uint16_t node_id);
+    void OnNodeOffline(node::NodeType node_type, uint16_t node_id);
 
     void OnCmdZNodeCreated(std::string_view path, std::span<const char> contents);
     void OnFreezeZNodeCreated(std::string_view path, std::span<const char> contents);
+    void OnStorageShardZNodeCreated(std::string_view path, std::span<const char> contents);
 
     void StartCommandHandler();
     void InfoCommandHandler();

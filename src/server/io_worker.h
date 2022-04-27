@@ -75,6 +75,13 @@ public:
         return conn != nullptr ? conn->as_ptr<T>() : nullptr;
     }
 
+    void RemoveConnection(int type) {
+        ConnectionBase* conn = PickConnection(type);
+        if(conn != nullptr){
+            connections_.erase(conn->id());
+        }
+    }
+
     template<class T>
     T* PickOrCreateConnection(int type, std::function<T*(IOWorker*)> create_cb);
 

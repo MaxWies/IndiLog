@@ -9,6 +9,8 @@
 namespace faas {
 namespace log {
 
+using node::NodeType;
+
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
@@ -21,7 +23,7 @@ using server::EgressHub;
 using server::NodeWatcher;
 
 SequencerBase::SequencerBase(uint16_t node_id)
-    : ServerBase(fmt::format("sequencer_{}", node_id)),
+    : ServerBase(node_id, fmt::format("sequencer_{}", node_id), node::kSequencerNode),
       node_id_(node_id) {}
 
 SequencerBase::~SequencerBase() {}
@@ -296,6 +298,24 @@ EgressHub* SequencerBase::CreateEgressHub(protocol::ConnType conn_type,
         egress_hubs_[egress_hub->id()] = std::move(egress_hub);
     }
     return hub;
+}
+
+void SequencerBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
+    if (node_type != NodeType::kEngineNode) {
+        return;
+    }
+    int egress_hub_id = GetEgressHubTypeId(protocol::ConnType::SEQUENCER_TO_ENGINE, node_id);
+    ForEachIOWorker([&] (IOWorker* io_worker) {
+        EgressHub* egress_hub = io_worker->PickConnectionAs<EgressHub>(egress_hub_id);
+        if(egress_hub != nullptr){
+            HLOG(INFO) << "Close egress hub of offline node...";
+            io_worker->ScheduleFunction(nullptr, [egress_hub = egress_hub]{
+                egress_hub->ScheduleClose();
+            });
+            return;
+        }
+        HLOG(INFO) << "This IOWorker had no egress connection for this node";
+    });
 }
 
 }  // namespace log

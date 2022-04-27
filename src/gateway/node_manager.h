@@ -4,6 +4,7 @@
 #include "common/protocol.h"
 #include "common/stat.h"
 #include "server/node_watcher.h"
+#include "server/scale_watcher.h"
 
 namespace faas {
 namespace gateway {
@@ -18,8 +19,9 @@ public:
     bool PickNodeForNewFuncCall(const protocol::FuncCall& func_call, uint16_t* node_id);
     void FuncCallFinished(const protocol::FuncCall& func_call, uint16_t node_id);
 
-    void OnNodeOnline(server::NodeWatcher::NodeType node_type, uint16_t node_id);
-    void OnNodeOffline(server::NodeWatcher::NodeType node_type, uint16_t node_id);
+    void OnNodeOnline(node::NodeType node_type, uint16_t node_id);
+    void OnNodeOffline(node::NodeType node_type, uint16_t node_id);
+    void OnNodeScaled(server::ScaleWatcher::ScaleOp scale_op, node::NodeType node_type, uint16_t node_id);
 
 private:
     Server* server_;

@@ -55,6 +55,7 @@ uint32_t IndexQueryResult::StorageShardId() const {
 Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
+      first_index_data_(true),
       data_received_seqnum_position_(0),
       indexed_seqnum_position_(0) {
     log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
@@ -196,6 +197,11 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
 
 void Index::ProvideIndexData(const IndexDataProto& index_data) {
     DCHECK_EQ(identifier(), index_data.logspace_id());
+    if(first_index_data_ && index_data.has_index_data()){
+        HVLOG_F(1, "Initialize data_received_seqnum_position with {}", index_data.seqnum_halves().at(0));
+        data_received_seqnum_position_ = index_data.seqnum_halves().at(0);
+        first_index_data_ = false;
+    }
     int n = index_data.seqnum_halves_size();
     DCHECK_EQ(n, index_data.engine_ids_size());
     DCHECK_EQ(n, index_data.user_logspaces_size());

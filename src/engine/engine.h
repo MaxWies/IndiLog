@@ -20,6 +20,8 @@ namespace log { class EngineBase; }
 
 namespace engine {
 
+using node::NodeType;
+
 class Engine final : public server::ServerBase {
 public:
     explicit Engine(uint16_t node_id);
@@ -117,7 +119,7 @@ private:
     void SetupGatewayEgress();
     void SetupLocalIpc();
 
-    void OnNodeOnline(server::NodeWatcher::NodeType node_type, uint16_t node_id);
+    void OnNodeOnline(NodeType node_type, uint16_t node_id);
 
     void CreateGatewayIngressConn(int sockfd);
     void CreateSharedLogIngressConn(int sockfd, protocol::ConnType type,
