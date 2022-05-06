@@ -42,11 +42,15 @@ protected:
 
     LogSpaceBase(Mode mode, const View* view, uint16_t sequencer_id);
     void AddInterestedShard(uint16_t shard_id);
+    absl::flat_hash_set<size_t> interested_shards_;   
+
+    std::vector<uint16_t> active_storage_shard_ids() { return active_storage_shard_ids_; }
 
     using OffsetVec = absl::FixedArray<uint32_t>;
     virtual void OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
                            uint32_t delta) {}
+    virtual void OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_cuts) {}
     virtual void OnTrim(uint32_t metalog_seqnum,
                         uint32_t user_logspace, uint64_t user_tag,
                         uint64_t trim_seqnum) {}
@@ -57,12 +61,12 @@ protected:
     State state_;
     const View* view_;
     const View::Sequencer* sequencer_node_;
-    std::vector<uint16_t> active_storage_shard_ids_;
     uint32_t metalog_position_;
     std::string log_header_;
 
 private:
-    absl::flat_hash_set<size_t> interested_shards_;   
+    std::vector<uint16_t> active_storage_shard_ids_;
+
     absl::flat_hash_map<uint16_t, uint32_t> shard_progresses_;
     uint32_t seqnum_position_;
 
@@ -81,6 +85,78 @@ private:
 };
 
 template<class T>
+class PhysicalLogSpaceCollection {
+public:
+    PhysicalLogSpaceCollection() {}
+    ~PhysicalLogSpaceCollection() {}
+
+    LockablePtr<T> GetLogSpaceChecked(uint16_t identifier) const;
+    LockablePtr<T> GetLogSpaceChecked(uint32_t identifier) const;
+
+    bool LogSpaceExists(uint16_t identifier) const;
+    bool LogSpaceExists(uint32_t identifier) const;
+
+    void InstallLogSpace(std::unique_ptr<T> log_space);
+
+    bool FinalizeLogSpace(uint16_t identifier) const;
+    bool FinalizeLogSpace(uint32_t identifier) const;
+
+    using IterCallback = std::function<void(/* identifier */ uint32_t, LockablePtr<T>)>;
+    void ForEachLogSpace(IterCallback cb) const;
+private:
+    //absl::flat_hash_map<uint16_t, std::set<uint16_t>> physical_log_spaces_;
+    absl::flat_hash_map</* identifier */ uint32_t, LockablePtr<T>> log_spaces_;
+    DISALLOW_COPY_AND_ASSIGN(PhysicalLogSpaceCollection);
+};
+
+template<class T>
+LockablePtr<T> PhysicalLogSpaceCollection<T>::GetLogSpaceChecked(uint32_t identifier) const {
+    if (!log_spaces_.contains(identifier)) {
+        LOG_F(FATAL, "Cannot find LogSpace with identifier {}", identifier);
+    }
+    return log_spaces_.at(identifier);
+}
+
+template<class T>
+LockablePtr<T> PhysicalLogSpaceCollection<T>::GetLogSpaceChecked(uint16_t identifier) const {
+    uint32_t global_identifier = bits::JoinTwo16(0, identifier);
+    if (!log_spaces_.contains(global_identifier)) {
+        LOG_F(FATAL, "Cannot find LogSpace with identifier {}", global_identifier);
+    }
+    return log_spaces_.at(global_identifier);
+}
+
+template<class T>
+bool PhysicalLogSpaceCollection<T>::LogSpaceExists(uint16_t identifier) const {
+    uint32_t global_identifier = bits::JoinTwo16(0, identifier);
+    return log_spaces_.contains(global_identifier);
+}
+
+template<class T>
+bool PhysicalLogSpaceCollection<T>::LogSpaceExists(uint32_t identifier) const {
+    return log_spaces_.contains(identifier);
+}
+
+template<class T>
+void PhysicalLogSpaceCollection<T>::InstallLogSpace(std::unique_ptr<T> log_space) {
+    uint32_t identifier = log_space->identifier();
+    if(log_spaces_.count(identifier) == 0) {
+        log_spaces_[identifier] = LockablePtr<T>(std::move(log_space));
+    }
+}
+
+template<class T>
+void PhysicalLogSpaceCollection<T>::ForEachLogSpace(IterCallback cb) const {
+    auto iter = log_spaces_.begin();
+    while (iter != log_spaces_.end()) {
+        DCHECK(log_spaces_.contains(*iter));
+        cb(*iter, log_spaces_.at(*iter));
+        iter++;
+    }
+}
+
+
+template<class T>
 class LogSpaceCollection {
 public:
     LogSpaceCollection() {}
@@ -90,6 +166,7 @@ public:
     LockablePtr<T> GetLogSpace(uint32_t identifier) const;
     // Panic if not found. It ensures the return is never nullptr
     LockablePtr<T> GetLogSpaceChecked(uint32_t identifier) const;
+    LockablePtr<T> GetLogSpaceCheckedShort(uint16_t identifier) const;
 
     void InstallLogSpace(std::unique_ptr<T> log_space);
     // Only active LogSpace can be finalized
@@ -101,6 +178,8 @@ public:
     void ForEachActiveLogSpace(const View* view, IterCallback cb) const;
     void ForEachActiveLogSpace(IterCallback cb) const;
     void ForEachFinalizedLogSpace(IterCallback cb) const;
+
+    size_t ComputeSizeLogSpace(uint32_t identifier) const;
 
 private:
     std::set</* identifier */ uint32_t> active_log_spaces_;
@@ -190,6 +269,16 @@ void LogSpaceCollection<T>::ForEachFinalizedLogSpace(IterCallback cb) const {
         DCHECK(log_spaces_.contains(*iter));
         cb(*iter, log_spaces_.at(*iter));
         iter++;
+    }
+}
+
+template<class T>
+size_t LogSpaceCollection<T>::ComputeSizeLogSpace(uint32_t identifier) const {
+    if (log_spaces_.contains(identifier)) {
+        auto log_space = log_spaces_.at(identifier);
+        return log_space->ComputeSize();
+    } else {
+        return 0;
     }
 }
 

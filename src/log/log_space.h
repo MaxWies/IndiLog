@@ -140,6 +140,7 @@ private:
     void OnNewLogs(uint32_t metalog_seqnum,
                    uint64_t start_seqnum, uint64_t start_localid,
                    uint32_t delta) override;
+    void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;
 
     void AdvanceShardProgress(uint16_t engine_id);

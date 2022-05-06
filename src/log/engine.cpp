@@ -6,6 +6,8 @@
 #include "utils/random.h"
 #include "server/constants.h"
 
+#include "log/utils.h"
+
 namespace faas {
 namespace log {
 
@@ -22,11 +24,24 @@ using server::IngressConnection;
 using server::EgressHub;
 using server::NodeWatcher;
 
+using log::IndexingStrategy;
+
 Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false) {
+          if(absl::GetFlag(FLAGS_slog_engine_index_tier_only)){
+              indexing_strategy_ = IndexingStrategy::INDEX_TIER_ONLY;
+          } else{
+              if(absl::GetFlag(FLAGS_slog_engine_distributed_indexing)){
+                  indexing_strategy_ = IndexingStrategy::DISTRIBUTED;
+                  seqnum_cache_.emplace(1000);
+              } else {
+                  indexing_strategy_ = IndexingStrategy::COMPLETE;
+              }
+          }
+      }
 
 Engine::~Engine() {}
 
@@ -121,16 +136,34 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
                 append_results.insert(append_results.end(), tmp.begin(), tmp.end());
             }
         );
-        index_collection_.ForEachActiveLogSpace(
-            finalized_view->view(),
-            [finalized_view, &query_results] (uint32_t logspace_id,
-                                              LockablePtr<Index> index_ptr) {
-                log_utils::FinalizedLogSpace<Index>(
-                    index_ptr, finalized_view);
-                auto locked_index = index_ptr.Lock();
-                locked_index->PollQueryResults(&query_results);
-            }
-        );
+        switch(indexing_strategy_){
+            case IndexingStrategy::DISTRIBUTED:
+                // todo: broken
+                // tag_cache_collection_.ForEachLogSpace(
+                //     [finalized_view, &query_results] (uint32_t logspace_id,
+                //                                     LockablePtr<TagCache> tag_cache_ptr) {
+                //         log_utils::FinalizedLogSpace<TagCache>(
+                //             tag_cache_ptr, finalized_view);
+                //         auto locked_index = tag_cache_ptr.Lock();
+                //         locked_index->PollQueryResults(&query_results);
+                //     }
+                // );
+                break;
+            case IndexingStrategy::COMPLETE:
+                index_collection_.ForEachActiveLogSpace(
+                    finalized_view->view(),
+                    [finalized_view, &query_results] (uint32_t logspace_id,
+                                                    LockablePtr<Index> index_ptr) {
+                        log_utils::FinalizedLogSpace<Index>(
+                            index_ptr, finalized_view);
+                        auto locked_index = index_ptr.Lock();
+                        locked_index->PollQueryResults(&query_results);
+                    }
+                );
+                break;
+            default:
+                break;
+        }
     }
     if (!append_results.empty()) {
         SomeIOWorker()->ScheduleFunction(
@@ -288,42 +321,97 @@ void Engine::HandleLocalRead(LocalOp* op) {
     }
     onging_reads_.PutChecked(op->id, op);
     ONHOLD_IF_SEEN_FUTURE_VIEW(op);
-    if (absl::GetFlag(FLAGS_slog_use_index_tier_only)){
+    if (indexing_strategy_ == IndexingStrategy::INDEX_TIER_ONLY){
         HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
         return;
     }
-    //TODO:local indexing
-    LockablePtr<Index> index_ptr;
-    {
-        index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
-    }
-    bool use_local_index = true;
-    if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
-        use_local_index = false;
-    }
-    if (absl::GetFlag(FLAGS_slog_engine_prob_remote_index) > 0.0f) {
-        float coin = utils::GetRandomFloat(0.0f, 1.0f);
-        if (coin < absl::GetFlag(FLAGS_slog_engine_prob_remote_index)) {
-            use_local_index = false;
-        }
-    }
-    Index::QueryResultVec local_index_misses;
-    if (index_ptr != nullptr && use_local_index) {
-        // Use local index
-        IndexQuery query = BuildIndexQuery(op);
+    IndexQuery query = BuildIndexQuery(op);
+    if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
         Index::QueryResultVec query_results;
-        {
-            auto locked_index = index_ptr.Lock();
-            locked_index->MakeQuery(query);
-            locked_index->PollQueryResults(&query_results);
+        Index::QueryResultVec local_index_misses;
+        // use seqnum suffix
+        if(op->query_tag == kEmptyLogTag){
+            LockablePtr<SeqnumSuffixChain> suffix_chain_ptr;
+            {
+                suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
+            }
+            {
+                auto locked_index = suffix_chain_ptr.Lock();
+                query_results.push_back(locked_index->MakeQuery(query));
+            }
+            ProcessIndexQueryResults(query_results, &local_index_misses);
+            if (local_index_misses.size() < 1){
+                return;
+            }
         }
-        ProcessIndexQueryResults(query_results, &local_index_misses);
+        // use seqnum cache
+        if(op->query_tag == kEmptyLogTag && !local_index_misses.empty()){
+            Index::QueryResultVec query_results;
+            DCHECK(local_index_misses.size() == 1);
+            local_index_misses.clear(); // only one miss can be later exist
+            query_results.push_back(seqnum_cache_->MakeQuery(query));
+            ProcessIndexQueryResults(query_results, &local_index_misses);
+            if (local_index_misses.size() < 1){
+                return;
+            }
+            DCHECK(local_index_misses.size() == 1);
+        }
+        // use tag cache
+        if(op->query_tag != kEmptyLogTag){
+            LockablePtr<TagCache> tag_cache_ptr;
+            {
+                tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+            }
+            Index::QueryResultVec query_results;
+            {
+                auto locked_tag_cache = tag_cache_ptr.Lock();
+                locked_tag_cache->MakeQuery(query);
+                locked_tag_cache->PollQueryResults(&query_results);
+            }
+            ProcessIndexQueryResults(query_results, &local_index_misses);
+            if (local_index_misses.size() < 1){
+                return;
+            }
+        }
+        // Finally send to index tier if misses exist
         if(!local_index_misses.empty()){
             ProcessLocalIndexMisses(local_index_misses, logspace_id);
         }
+    } else if (indexing_strategy_ == IndexingStrategy::COMPLETE){
+        // complete index
+        LockablePtr<Index> index_ptr;
+        {
+            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+        }
+        bool use_complete_index = true;
+        if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
+            use_complete_index = false;
+        }
+        if (absl::GetFlag(FLAGS_slog_engine_prob_remote_index) > 0.0f) {
+            float coin = utils::GetRandomFloat(0.0f, 1.0f);
+            if (coin < absl::GetFlag(FLAGS_slog_engine_prob_remote_index)) {
+                use_complete_index = false;
+            }
+        }
+        Index::QueryResultVec local_index_misses;
+        if (index_ptr != nullptr && use_complete_index) {
+            IndexQuery query = BuildIndexQuery(op);
+            Index::QueryResultVec query_results;
+            {
+                auto locked_index = index_ptr.Lock();
+                locked_index->MakeQuery(query);
+                locked_index->PollQueryResults(&query_results);
+            }
+            ProcessIndexQueryResults(query_results, &local_index_misses);
+            if(!local_index_misses.empty()){
+                ProcessLocalIndexMisses(local_index_misses, logspace_id);
+            }
+        } else {
+            HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
+            HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+        }
     } else {
-        HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
-        HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+        UNREACHABLE();
     }
 }
 
@@ -389,22 +477,35 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
         IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
+        uint32_t metalog_position_producer = 0;
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
             for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                 locked_producer->ProvideMetaLog(metalog_proto);
             }
+            metalog_position_producer = locked_producer->metalog_position();
             locked_producer->PollAppendResults(&append_results);
         }
-        //TODO: local indexing
-        auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
-        {
-            auto locked_index = index_ptr.Lock();
-            for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
-                locked_index->ProvideMetaLog(metalog_proto);
+        if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED){
+            auto suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(message.sequencer_id);
+            {
+                auto locked_suffix_chain = suffix_chain_ptr.Lock();
+                for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
+                    locked_suffix_chain->ProvideMetaLog(metalog_proto);
+                }
+                DCHECK(metalog_position_producer == locked_suffix_chain->metalog_position());
+                // no polling for suffix
             }
-            locked_index->PollQueryResults(&query_results);
+        } else if (indexing_strategy_ == IndexingStrategy::COMPLETE){
+            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+            {
+                auto locked_index = index_ptr.Lock();
+                for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
+                    locked_index->ProvideMetaLog(metalog_proto);
+                }
+                locked_index->PollQueryResults(&query_results);
+            }
         }
     }
     ProcessAppendResults(append_results);
@@ -429,13 +530,26 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
         DCHECK(message.view_id < views_.size());
-        //Todo: local index takes only what it wants
-        auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
-        {
-            auto locked_index = index_ptr.Lock();
-            locked_index->ProvideIndexData(index_data_proto);
-            locked_index->AdvanceIndexProgress();
-            locked_index->PollQueryResults(&query_results);
+        if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+            // feed tag cache
+            auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
+            {
+                auto locked_tag_cache = tag_cache_ptr.Lock();
+                locked_tag_cache->ProvideIndexData(
+                    message.view_id,
+                    index_data_proto
+                );
+                locked_tag_cache->PollQueryResults(&query_results);
+            }
+        } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
+            // feed complete index
+            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+            {
+                auto locked_index = index_ptr.Lock();
+                locked_index->ProvideIndexData(index_data_proto);
+                locked_index->AdvanceIndexProgress();
+                locked_index->PollQueryResults(&query_results);
+            }
         }
     }
     ProcessIndexQueryResults(query_results, &local_index_misses);
@@ -484,6 +598,13 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
+            // TODO
+            // Put the received seqnum into seqnum cache (if not a tag based request) 
+            // if (op->query_tag == kEmptyLogTag){
+            //     if (seqnum_cache_.has_value()){
+            //         seqnum_cache_->Put(seqnum, result.found_result.storage_shard_id);
+            //     }
+            // }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
@@ -503,7 +624,22 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         } else {
             UNREACHABLE();
         }
-    } else {
+    } else if (result == SharedLogResultType::INDEX_OK) {
+        if (result == SharedLogResultType::INDEX_OK) {
+            IndexResultProto index_result_proto;
+            if (!index_result_proto.ParseFromArray(payload.data(),
+                                         static_cast<int>(payload.size()))) {
+                LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
+            }
+            DCHECK(index_result_proto.found());
+            if (message.query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
+                seqnum_cache_->Put(index_result_proto.seqnum(), gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
+            }
+        } else {
+            UNREACHABLE();
+        }
+    }
+    else {
         HLOG(FATAL) << "Unknown result type: " << message.op_result;
     }
 }
@@ -573,7 +709,27 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
         producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, received_message.local_start_id));
-        index_collection_.InstallLogSpace(std::make_unique<Index>(current_view_, received_message.sequencer_id));
+        if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+            if(!suffix_chain_collection_.LogSpaceExists(received_message.sequencer_id)){
+                suffix_chain_collection_.InstallLogSpace(std::make_unique<SeqnumSuffixChain>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_seqnum_suffix_cap), 0.2));
+            }
+            auto suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(received_message.sequencer_id);
+            {
+                auto locked_suffix_chain = suffix_chain_ptr.Lock();
+                locked_suffix_chain->Extend(current_view_);
+            }
+            if(!tag_cache_collection_.LogSpaceExists(received_message.sequencer_id)){
+                tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(received_message.sequencer_id, 10000));
+            }
+            auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(received_message.sequencer_id);
+            {
+                auto locked_tag_cache_ptr = tag_cache_ptr.Lock();
+                locked_tag_cache_ptr->InstallView(current_view_->id());
+            }
+            // seq cache is built in constructor and physical log independent
+        } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
+            index_collection_.InstallLogSpace(std::make_unique<Index>(current_view_, received_message.sequencer_id));
+        }
         // run ready requests
         std::vector<SharedLogRequest> ready_requests;
         future_requests_.OnNewView(current_view_, &ready_requests);
@@ -719,9 +875,15 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
 void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* local_index_misses) {
     Index::QueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
+        const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
             ProcessIndexFoundResult(result);
+            if (result.original_query.user_tag == kEmptyLogTag){
+                if (seqnum_cache_.has_value()){
+                    seqnum_cache_->Put(result.found_result.seqnum, result.found_result.storage_shard_id);
+                }
+            }
             break;
         case IndexQueryResult::kEmpty:
             HVLOG(1) << "No result for query. Request must be handled by index tier";
@@ -729,6 +891,11 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
             break;
         case IndexQueryResult::kContinue:
             ProcessIndexContinueResult(result, &more_results);
+            break;
+        case IndexQueryResult::kInvalid:
+            FinishLocalOpWithFailure(
+                onging_reads_.PollChecked(query.client_data),
+                SharedLogResultType::EMPTY, result.metalog_progress);
             break;
         default:
             UNREACHABLE();

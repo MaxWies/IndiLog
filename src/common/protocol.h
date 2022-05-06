@@ -113,6 +113,7 @@ enum class SharedLogResultType : uint16_t {
     TRIM_OK     = 0x22,
     LOCALID     = 0x23,
     AUXDATA_OK  = 0x24,
+    INDEX_OK    = 0x25,
     // Error results
     BAD_ARGS    = 0x30,
     DISCARDED   = 0x31,  // Log to append is discarded

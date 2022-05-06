@@ -178,7 +178,7 @@ void LogSpaceBase::ConsiderStorageShardChange(const MetaLogProto& meta_log){
     if(meta_log.storage_shard_change() || first_metalog_){
         HVLOG(1) << "Storage shard change: Update active storage shards";
         active_storage_shard_ids_.clear();
-        for (uint32_t storage_shard_id : meta_log.storage_shard_ids()){
+        for (uint32_t storage_shard_id : meta_log.active_storage_shard_ids()){
             uint16_t shard_id = gsl::narrow_cast<uint16_t>(storage_shard_id);
             active_storage_shard_ids_.push_back(shard_id);
         }
@@ -193,6 +193,7 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
             uint32_t start_seqnum = new_logs.start_seqnum();
             HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                     meta_log.metalog_seqnum(), start_seqnum);
+            std::vector<std::pair<uint16_t, uint32_t>> productive_cuts_;
             for (size_t i = 0; i < active_storage_shard_ids_.size(); i++) {
                 uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));
                 uint32_t delta = new_logs.shard_deltas(static_cast<int>(i));
@@ -204,9 +205,13 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                 }
                 shard_progresses_[active_storage_shard_ids_[i]] = shard_start + delta;
                 start_seqnum += delta;
+                if (0 < delta){
+                    productive_cuts_.push_back(std::make_pair(active_storage_shard_ids_[i], shard_start + delta - 1));
+                }
             }
             DCHECK_GT(start_seqnum, seqnum_position_);
             seqnum_position_ = start_seqnum;
+            OnNewLogs(productive_cuts_);
         }
         break;
     case MetaLogProto::TRIM:

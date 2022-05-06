@@ -128,7 +128,7 @@ std::optional<MetaLogProto> MetaLogPrimary::MarkNextCut() {
     new_logs_proto->set_start_seqnum(bits::LowHalf64(seqnum_position()));
     uint32_t total_delta = 0;
     for (uint16_t shard_id : unblocked_shards_) {
-        meta_log_proto.add_storage_shard_ids(shard_id);
+        meta_log_proto.add_active_storage_shard_ids(shard_id);
         new_logs_proto->add_shard_starts(last_cut_.at(shard_id));
         uint32_t delta = 0;
         if (dirty_shards_.contains(shard_id)) {
@@ -370,7 +370,7 @@ std::optional<std::vector<uint32_t>> LogStorage::GrabShardProgressForSending() {
     return progress;
 }
 
-// delta and start_localid in the context of an engine
+// delta and start_localid in the context of an active storage shard
 // start_seqnum is increased for each engine
 void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
@@ -422,6 +422,16 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                 .original_request = iter->second
             });
             iter = pending_read_requests_.erase(iter);
+        }
+    }
+}
+
+void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
+    index_data_.add_metalog_positions(metalog_position_);
+    index_data_.add_num_active_storage_shards(gsl::narrow_cast<uint32_t>(active_storage_shard_ids().size()));
+    for(uint16_t active_storage_shard_id : active_storage_shard_ids()){
+        if(interested_shards_.contains(active_storage_shard_id)){
+            index_data_.add_my_active_storage_shards(active_storage_shard_id);
         }
     }
 }

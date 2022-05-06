@@ -175,7 +175,7 @@ void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutabl
                             index_id, message, STRING_AS_SPAN(serialized_data));
     }
 
-    // dirty
+    // todo: dirty
     // send metalog data to other shards
     IndexDataProto index_data_proto_short;
     index_data_proto_short.set_logspace_id(index_data_proto.logspace_id());

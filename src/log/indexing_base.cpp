@@ -112,12 +112,12 @@ static inline std::string SerializedIndexResult(const IndexQueryResult& result) 
     if (result.state == IndexQueryResult::kEmpty){
         index_result_proto.set_found(false);
         index_result_proto.set_view_id(result.next_view_id); // TODO
-        index_result_proto.set_location_identifier(0);
+        index_result_proto.set_storage_shard_id(0);
         index_result_proto.set_seqnum(0);
     } else {
         index_result_proto.set_found(true);
         index_result_proto.set_view_id(result.found_result.view_id);
-        index_result_proto.set_location_identifier(result.found_result.storage_shard_id);
+        index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
         index_result_proto.set_seqnum(result.found_result.seqnum);
     }
     std::string data;
@@ -153,7 +153,8 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
 //not used so far
 void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
     uint16_t engine_id = result.original_query.origin_node_id;
-    SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
+    //SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
+    SharedLogMessage response = SharedLogMessageHelper::NewResponse(protocol::SharedLogResultType::INDEX_OK);
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
     response.client_data = result.original_query.client_data;

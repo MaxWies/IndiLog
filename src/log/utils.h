@@ -9,6 +9,7 @@ namespace faas {
 namespace log_utils {
 
 uint16_t GetViewId(uint64_t value);
+uint16_t GetSequencerId(uint64_t value);
 
 // Used for on-holding requests for future views
 class FutureRequests {

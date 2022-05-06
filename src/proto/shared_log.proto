@@ -65,7 +65,7 @@ message MetaLogProto {
     uint32 metalog_seqnum = 2;
 
     bool storage_shard_change = 3;
-    repeated uint32 storage_shard_ids = 4; //sorted ascending
+    repeated uint32 active_storage_shard_ids = 4; //sorted ascending
 
     enum Type {
         INVALID  = 0;
@@ -125,22 +125,44 @@ message IndexDataProto {
     uint32 logspace_id  = 1;
 
     repeated uint32 metalog_positions = 2;
-    uint32 next_seqnum = 3;
+    repeated uint32 num_active_storage_shards = 3; //todo
+    repeated uint32 my_active_storage_shards = 4;
 
-    repeated uint32 user_logspaces = 4; //is always sent
+    uint32 next_seqnum = 5;
 
-    bool has_index_data = 5;
+    repeated uint32 user_logspaces = 6; //is always sent
 
-    repeated uint32 seqnum_halves  = 6;
-    repeated uint32 engine_ids     = 7;
-    repeated uint32 user_tag_sizes = 8;
-    repeated uint64 user_tags      = 9;
+    bool has_index_data = 7;
+
+    repeated uint32 seqnum_halves  = 8;
+    repeated uint32 engine_ids     = 9;
+    repeated uint32 user_tag_sizes = 10;
+    repeated uint64 user_tags      = 11;
 }
 
 message IndexResultProto {
     uint32 original_requester_id = 1;
     bool found = 2;
     uint32 view_id = 3;
-    uint32 location_identifier = 4;
+    uint32 storage_shard_id = 4;
     uint64 seqnum = 5;
+    bool is_min = 6;
+    bool is_max = 7;
+}
+
+message IndexOpProto {
+    uint64 bound = 1;
+    uint32 node_id = 2;
+    enum Type {
+        COMPLETE  = 0;
+        SUFFIX    = 1;
+        POP_SEQ   = 2;
+        TAGS      = 3;
+    }
+    Type type = 3;
+    enum Op {
+        PRINT_SIZE = 0;
+        TRIM = 1;
+    }
+    Op op = 4;
 }

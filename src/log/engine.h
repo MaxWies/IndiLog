@@ -3,6 +3,9 @@
 #include "log/engine_base.h"
 #include "log/log_space.h"
 #include "log/index.h"
+#include "log/index_local_suffix.h"
+#include "log/index_local_seq_cache.h"
+#include "log/index_local_tag_cache.h"
 #include "log/utils.h"
 
 namespace faas {
@@ -12,6 +15,12 @@ namespace engine { class Engine; }
 
 namespace log {
 
+enum class IndexingStrategy {
+    COMPLETE,
+    DISTRIBUTED,
+    INDEX_TIER_ONLY
+};
+
 class Engine final : public EngineBase {
 public:
     explicit Engine(engine::Engine* engine);
@@ -19,6 +28,7 @@ public:
 
 private:
     std::string log_header_;
+    IndexingStrategy indexing_strategy_;
 
     absl::Mutex view_mu_;
     const View* current_view_          ABSL_GUARDED_BY(view_mu_);
@@ -29,6 +39,11 @@ private:
         producer_collection_         ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
+
+    // distributed indexing
+    PhysicalLogSpaceCollection<SeqnumSuffixChain> suffix_chain_collection_ ABSL_GUARDED_BY(view_mu_);
+    PhysicalLogSpaceCollection<TagCache> tag_cache_collection_ ABSL_GUARDED_BY(view_mu_);
+    std::optional<SeqnumCache> seqnum_cache_;
 
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_reads_;
@@ -41,6 +56,9 @@ private:
     void HandleLocalTrim(LocalOp* op) override;
     void HandleLocalRead(LocalOp* op) override;
     void HandleLocalSetAuxData(LocalOp* op) override;
+
+    // LogSpaceCollection<SuffixSeq> GetPreviousSuffixSeq(uint16_t view_id);
+    // LogSpaceCollection<SuffixSeq> GetNextSuffixSeq(uint16_t view_id);
 
     void HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::StorageShard* storage_shard);
     void ProcessLocalIndexMisses(const Index::QueryResultVec& miss_results, uint32_t logspace_id);

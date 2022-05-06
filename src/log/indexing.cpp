@@ -387,6 +387,10 @@ void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
         }
     }
     bool success = SendStorageReadRequest(query_result, storage_shard);
+    if (success) {
+        //Todo: a bit shady here
+        SendIndexReadResponse(query_result);
+    }
     if (!success) {
         uint64_t seqnum = query_result.found_result.seqnum;
         IndexQuery query = query_result.original_query;
@@ -526,7 +530,7 @@ IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message,
         .original_query = query,
         .found_result = IndexFoundResult {
             .view_id = gsl::narrow_cast<uint16_t>(result.view_id()),
-            .storage_shard_id = gsl::narrow_cast<uint16_t>(result.location_identifier()),
+            .storage_shard_id = gsl::narrow_cast<uint16_t>(result.storage_shard_id()),
             .seqnum = result.seqnum()
         }
     };
