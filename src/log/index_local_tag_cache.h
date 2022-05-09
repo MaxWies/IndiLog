@@ -11,16 +11,16 @@ using TagSuffix = std::map<uint16_t, TagSuffixLink>;
 class TagEntry{
 
 public:
-    TagEntry(uint64_t popularity, uint64_t seqnum_min, uint16_t storage_shard_id_min);
+    TagEntry(uint64_t seqnum_min, uint16_t storage_shard_id_min, uint64_t popularity);
     TagEntry(TagSuffix tag_suffix, uint64_t popularity);
     TagEntry(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
     ~TagEntry();
 
     void Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
     TagSuffix tag_suffix_;
-    uint64_t popularity_;
     uint64_t seqnum_min_;
     uint16_t shard_id_min_;
+    uint64_t popularity_;
 private:
 };
 
@@ -31,10 +31,12 @@ public:
     PerSpaceTagCache(uint32_t user_logspace);
     ~PerSpaceTagCache();
 
-    void Add(uint64_t tag, uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
+    void AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequencer_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
+    void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id);
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
+    bool TagExists(uint64_t tag);
 
     IndexQueryResult::State FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id,
                                      uint64_t* seqnum, uint16_t* engine_id) const;
@@ -46,6 +48,7 @@ private:
     std::string log_header_;
     // tag-key : tag-entry
     absl::flat_hash_map<uint64_t, std::unique_ptr<TagEntry>> tags_;
+    absl::flat_hash_map<uint64_t, std::pair<uint64_t, uint16_t>> pending_seqnum_min_;
 
     bool TagEntryExists(uint64_t key);
 };
@@ -78,9 +81,11 @@ public:
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
 
     void ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data_proto);
+    void ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto);
     bool AdvanceIndexProgress(uint16_t view_id);
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
+    bool TagExists(uint32_t user_logspace, uint64_t tag);
     void InstallView(uint16_t view_id);
 
     uint32_t identifier(){

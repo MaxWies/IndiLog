@@ -101,6 +101,7 @@ enum class SharedLogOpType : uint16_t {
     READ_NEXT_INDEX_RESULT = 0x16, // IndexNode to IndexNode, IndexNode to Engine
     READ_PREV_INDEX_RESULT = 0x17, // IndexNode to IndexNode, IndexNode to Engine
     READ_NEXT_B_INDEX_RESULT = 0x18, // IndexNode to IndexNode, IndexNode to Engine
+    READ_MIN    = 0x19, // Engine to Index (get MIN seqnum of tag)
     RESPONSE    = 0x20,
     REGISTER    = 0x40 // Engine to Storage, Engine to Sequencer, Sequencer to Sequencer
 };
@@ -114,12 +115,14 @@ enum class SharedLogResultType : uint16_t {
     LOCALID     = 0x23,
     AUXDATA_OK  = 0x24,
     INDEX_OK    = 0x25,
+    INDEX_MIN_OK = 0x26,
     // Error results
     BAD_ARGS    = 0x30,
     DISCARDED   = 0x31,  // Log to append is discarded
     EMPTY       = 0x32,  // Cannot find log entries satisfying requirements
     DATA_LOST   = 0x33,  // Failed to extract log data
     TRIM_FAILED = 0x34,
+    INDEX_MIN_FAILED = 0x35,
     // Registration
     REGISTER_ENGINE = 0x41,
     REGISTER_STORAGE_OK = 0x42,

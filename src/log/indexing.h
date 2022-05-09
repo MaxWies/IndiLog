@@ -34,6 +34,7 @@ private:
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
     void HandleReadRequest(const protocol::SharedLogMessage& request) override;
+    void HandleReadMinRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
 

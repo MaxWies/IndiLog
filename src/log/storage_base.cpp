@@ -166,38 +166,11 @@ void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutabl
                              engine_id, message, STRING_AS_SPAN(serialized_data));
         }
     }
-    // send index data to shard
-    const View::Storage* storage_node = view->GetStorageNode(my_node_id());
-    const View::NodeIdVec& index_shard_nodes = storage_node->PickIndexShardNodes();
-    for(uint16_t index_id : index_shard_nodes){
-        HVLOG_F(1, "MetalogUpdate: Send full index data to index node {}", index_id);
-        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
-                            index_id, message, STRING_AS_SPAN(serialized_data));
-    }
 
-    // todo: dirty
-    // send metalog data to other shards
-    IndexDataProto index_data_proto_short;
-    index_data_proto_short.set_logspace_id(index_data_proto.logspace_id());
-    for(const uint32_t& metalog_position : index_data_proto.metalog_positions()){
-        index_data_proto_short.add_metalog_positions(metalog_position);
-    }
-    index_data_proto_short.set_next_seqnum(index_data_proto.next_seqnum());
-    for(const uint32_t& user_logspace : index_data_proto.user_logspaces()){
-        index_data_proto_short.add_user_logspaces(user_logspace);
-    }
-    index_data_proto_short.set_has_index_data(false);
-    std::string serialized_data_short;
-    CHECK(index_data_proto_short.SerializeToString(&serialized_data_short));
-    SharedLogMessage message_short = SharedLogMessageHelper::NewIndexDataMessage(logspace_id);
-    message_short.origin_node_id = node_id_;
-    message_short.payload_size = gsl::narrow_cast<uint32_t>(serialized_data_short.size());
     for(uint16_t index_id : view->GetIndexNodes()){
-        if(std::find(index_shard_nodes.begin(), index_shard_nodes.end(), index_id) == index_shard_nodes.end()){
-            HVLOG_F(1, "MetalogUpdate: Send short index data to index node {}", index_id);
-            SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
-                                index_id, message_short, STRING_AS_SPAN(serialized_data_short));
-        }
+        HVLOG_F(1, "MetalogUpdate: Send index data to index node {}", index_id);
+        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
+            index_id, message, STRING_AS_SPAN(serialized_data));
     }
 }
 

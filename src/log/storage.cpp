@@ -199,18 +199,16 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
         {
             auto locked_storage = storage_ptr.Lock();
             RETURN_IF_LOGSPACE_FINALIZED(locked_storage);
-            //TODO: improve
-            //uint32_t metalog_position_before = locked_storage->metalog_position();
             for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                 HVLOG(1) << "MetalogUpdate: Provide metalog from sequencer";
                 locked_storage->ProvideMetaLog(metalog_proto);
             }
-            //uint32_t metalog_position_after = locked_storage->metalog_position();
             locked_storage->PollReadResults(&results);
             index_data = locked_storage->PollIndexData();
-            // for(uint32_t i = 1; i <= metalog_position_after - metalog_position_before; i++){
-            //     index_data->add_metalog_positions(metalog_position_before+i);
-            // }
+            view->GetStorageNode(my_node_id());
+            if (index_data.has_value()) {
+                    index_data->set_index_shard(view->GetStorageNode(my_node_id())->PickIndexShard());
+            }
         }
     }
     ProcessReadResults(results);

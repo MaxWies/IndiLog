@@ -275,6 +275,27 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         }
     }
     ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
+    if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED || op->user_tags.empty() || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
+        return;
+    }
+    std::vector<uint64_t> tags_without_min_seqnum;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        uint32_t logspace_id = view->LogSpaceIdentifier(op->user_logspace);
+        auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+        {
+            auto tag_cache = tag_cache_ptr.Lock();
+            for (uint64_t tag : op->user_tags) {
+                if (!tag_cache->TagExists(op->user_logspace, tag)){
+                    tags_without_min_seqnum.push_back(tag);
+                }
+            }
+        }
+    }
+    for (uint64_t tag : tags_without_min_seqnum) {
+        HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
+        HandleIndexTierMinSeqnumRead(op, tag, view->id(), storage_shard);
+    }
 }
 
 void Engine::HandleLocalTrim(LocalOp* op) {
@@ -303,8 +324,22 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
-    HVLOG_F(1, "Sent request to index tier successully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+    HVLOG_F(1, "Sent request to index tier successfully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
     return;
+}
+
+void Engine::HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, const View::StorageShard* storage_shard) {
+    HVLOG(1) << "Send seqnum min request to index tier";
+    uint16_t index_node = storage_shard->PickIndexNodeByTag(tag);
+    SharedLogMessage request = BuildIndexTierMinSeqnumRequestMessage(op, tag);
+    request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
+    request.view_id = view_id;
+    bool send_success = SendIndexTierReadRequest(index_node, &request);
+    if (!send_success) {
+        HLOG_F(WARNING, "Failed to send index tier request for min seqnum of tag {}", tag);
+        return;
+    }
+    HVLOG_F(1, "Sent request to index tier for min seqnum of tag {} successfully", tag);
 }
 
 void Engine::HandleLocalRead(LocalOp* op) {
@@ -598,13 +633,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
-            // TODO
-            // Put the received seqnum into seqnum cache (if not a tag based request) 
-            // if (op->query_tag == kEmptyLogTag){
-            //     if (seqnum_cache_.has_value()){
-            //         seqnum_cache_->Put(seqnum, result.found_result.storage_shard_id);
-            //     }
-            // }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
@@ -624,18 +652,35 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         } else {
             UNREACHABLE();
         }
-    } else if (result == SharedLogResultType::INDEX_OK) {
+    } else if (   result == SharedLogResultType::INDEX_OK
+               || result == SharedLogResultType::INDEX_MIN_OK
+               || result == SharedLogResultType::INDEX_MIN_FAILED) {
+        IndexResultProto index_result_proto;
+        if (!index_result_proto.ParseFromArray(payload.data(),
+                                        static_cast<int>(payload.size()))) {
+            LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
+        }
         if (result == SharedLogResultType::INDEX_OK) {
-            IndexResultProto index_result_proto;
-            if (!index_result_proto.ParseFromArray(payload.data(),
-                                         static_cast<int>(payload.size()))) {
-                LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
-            }
             DCHECK(index_result_proto.found());
+            // Put the received seqnum into seqnum cache (if not a tag based request) 
             if (message.query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
                 seqnum_cache_->Put(index_result_proto.seqnum(), gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
             }
-        } else {
+        } else if (result == SharedLogResultType::INDEX_MIN_OK) {
+            DCHECK(message.query_seqnum == 0);
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            LockablePtr<TagCache> tag_cache_ptr;
+            {
+                tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
+            }
+            {
+                auto locked_tag_cache = tag_cache_ptr.Lock();
+                locked_tag_cache->ProvideMinSeqnumData(message.user_logspace, message.query_tag, index_result_proto);
+            }
+        } else if (result == SharedLogResultType::INDEX_MIN_FAILED) {
+            LOG_F(ERROR, "Seqnum min request at index node for tag {} failed", message.origin_node_id, message.query_tag);
+        }
+        else {
             UNREACHABLE();
         }
     }
@@ -939,6 +984,22 @@ SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t 
     SharedLogMessage request = BuildReadRequestMessage(op);
     request.use_master_node_id = protocol::kUseMasterNodeId;
     request.master_node_id = master_node_id;
+    return request;
+}
+
+SharedLogMessage Engine::BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag) {
+    SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(SharedLogOpType::READ_MIN);
+    request.origin_node_id = my_node_id();
+    request.hop_times = 1;
+    request.client_data = op->id;
+    request.user_logspace = op->user_logspace;
+    request.query_tag = tag;
+    request.query_seqnum = 0;
+    request.user_metalog_progress = op->metalog_progress;
+    request.flags |= protocol::kReadInitialFlag;
+    request.prev_view_id = 0;
+    request.prev_shard_id = 0;
+    request.prev_found_seqnum = kInvalidLogSeqNum;
     return request;
 }
 

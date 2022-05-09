@@ -132,7 +132,7 @@ message IndexDataProto {
 
     repeated uint32 user_logspaces = 6; //is always sent
 
-    bool has_index_data = 7;
+    uint32 index_shard = 7;
 
     repeated uint32 seqnum_halves  = 8;
     repeated uint32 engine_ids     = 9;
@@ -146,8 +146,6 @@ message IndexResultProto {
     uint32 view_id = 3;
     uint32 storage_shard_id = 4;
     uint64 seqnum = 5;
-    bool is_min = 6;
-    bool is_max = 7;
 }
 
 message IndexOpProto {

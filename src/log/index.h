@@ -26,6 +26,8 @@ struct IndexQuery {
 
     uint16_t master_node_id;
 
+    bool min_seqnum_query;
+
     IndexFoundResult prev_found_result;
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
@@ -53,6 +55,7 @@ public:
     ~Index();
 
     void ProvideIndexData(const IndexDataProto& index_data);
+    void ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index_node_id);
 
     void MakeQuery(const IndexQuery& query);
 
@@ -62,7 +65,7 @@ public:
     void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
 
     void AdvanceIndexProgress();
-    bool AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data);
+    bool AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data, uint16_t my_index_node_id);
 
     bool TryCompleteIndexUpdates();
     bool TryAddToIndexUpdates(uint32_t metalog_position, uint16_t storage_shard_id);
@@ -98,6 +101,7 @@ private:
         uint16_t   engine_id;
         uint32_t   user_logspace;
         UserTagVec user_tags;
+        bool skip;
     };
     std::map</* seqnum */ uint32_t, IndexData> received_data_;
     uint32_t data_received_seqnum_position_;

@@ -164,6 +164,32 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     }
 }
 
+void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
+    SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
+    DCHECK(op_type == SharedLogOpType::READ_MIN);
+    IndexQuery query = BuildIndexQuery(request, request.origin_node_id);
+    query.min_seqnum_query = true;
+    LockablePtr<Index> index_ptr;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
+        index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
+    }
+    if (index_ptr != nullptr) {
+        HVLOG_F(1, "IndexRead: Make query for min seqnum. logspace={}, tag={}, seqnum={}", bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, bits::HexStr0x(query.query_seqnum));
+        Index::QueryResultVec query_results;
+        {
+            auto locked_index = index_ptr.Lock();
+            locked_index->MakeQuery(query);
+            locked_index->PollQueryResults(&query_results);
+        }
+        ProcessIndexQueryResults(query_results);
+    } else {
+        HVLOG_F(1, "IndexRead: There is no local index for logspace {}", request.logspace_id);
+        SendIndexReadFailureResponse(query, protocol::SharedLogResultType::INDEX_MIN_FAILED);
+    }
+}
+
 void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
@@ -206,7 +232,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
                 LOG(WARNING) << "IndexUpdate: Index update from old metalog";
                 return;
             }
-            if(!locked_index->AdvanceIndexProgress(storage_shards, index_data_proto)){
+            if(!locked_index->AdvanceIndexProgress(storage_shards, index_data_proto, my_node_id())){
                 HVLOG(1) << "IndexUpdate: Do not process query results because metalog did not increase";
                 return;
             }
@@ -318,6 +344,10 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
 
 void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
     DCHECK(query_result.state == IndexQueryResult::kFound || query_result.state == IndexQueryResult::kEmpty);
+    if (query_result.original_query.min_seqnum_query){
+        SendIndexReadResponse(query_result);
+        return;
+    }
     if (IsSlave(query_result.original_query)){
         HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), query_result.original_query.master_node_id);
         SendMasterIndexResult(query_result);

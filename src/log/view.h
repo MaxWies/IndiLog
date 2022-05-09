@@ -121,6 +121,11 @@ public:
             return index_nodes.at(idx % index_nodes.size());
         }
 
+        uint16_t PickIndexNodeByTag(uint64_t tag) const {
+            size_t shard = tag % view_->num_index_shards_;
+            return PickIndexNode(shard);
+        }
+
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {
             size_t first_shard = PickIndexShard(); // node of shard is master
             LOG_F(INFO, "Master shard is {} of {} shards", first_shard, view_->num_index_shards_);
@@ -229,6 +234,11 @@ public:
             return index_shard_nodes_.at(idx % view_->num_index_shards());
         }
 
+        uint16_t PickIndexShard() const {
+            size_t idx = __atomic_fetch_add(&next_index_shard_, 1, __ATOMIC_RELAXED);
+            return gsl::narrow_cast<uint16_t>(idx % view_->num_index_shards());
+        }
+
     private:
         friend class View;
         const View* view_;
@@ -269,6 +279,10 @@ public:
             return storage_nodes.at(storage_node_pos);
         }
 
+        bool IsIndexShardMember(uint16_t index_shard) const {
+            return index_shards_.contains(index_shard);
+        }
+
     private:
         friend class View;
         const View* view_;
@@ -277,9 +291,11 @@ public:
         //TODO: should be NodeIdVec
         absl::flat_hash_map<uint32_t, std::vector<uint16_t>> per_shard_storage_nodes_;
         absl::flat_hash_map<uint32_t, size_t> next_shard_storage_node_;
+        absl::flat_hash_set<uint16_t> index_shards_;
 
         Index(const View* view, uint16_t node_id,
-              const absl::flat_hash_map<uint32_t, std::vector<uint16_t>>& storage_shard_nodes);
+              const absl::flat_hash_map<uint32_t, std::vector<uint16_t>>& storage_shard_nodes,
+              const absl::flat_hash_set<uint16_t>& index_shards);
         DISALLOW_IMPLICIT_CONSTRUCTORS(Index);
     };
 

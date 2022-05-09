@@ -70,6 +70,7 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
         (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_MIN)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_INDEX_RESULT)
      || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_PREV_INDEX_RESULT)
@@ -99,6 +100,9 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
         HVLOG(1) << "Handle slave result";
         HandleSlaveResult(message, payload);
         break;
+    case SharedLogOpType::READ_MIN:
+        HandleReadMinRequest(message);
+        break;
     default:
         LOG(ERROR) << "Operation type unknown";
         UNREACHABLE();
@@ -110,16 +114,14 @@ static inline std::string SerializedIndexResult(const IndexQueryResult& result) 
     IndexResultProto index_result_proto;
     index_result_proto.set_original_requester_id(result.original_query.origin_node_id);
     if (result.state == IndexQueryResult::kEmpty){
+        DCHECK(result.found_result.seqnum == kInvalidLogSeqNum);
         index_result_proto.set_found(false);
-        index_result_proto.set_view_id(result.next_view_id); // TODO
-        index_result_proto.set_storage_shard_id(0);
-        index_result_proto.set_seqnum(0);
     } else {
         index_result_proto.set_found(true);
-        index_result_proto.set_view_id(result.found_result.view_id);
-        index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
-        index_result_proto.set_seqnum(result.found_result.seqnum);
     }
+    index_result_proto.set_view_id(result.found_result.view_id);
+    index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
+    index_result_proto.set_seqnum(result.found_result.seqnum);
     std::string data;
     CHECK(index_result_proto.SerializeToString(&data));
     return data;

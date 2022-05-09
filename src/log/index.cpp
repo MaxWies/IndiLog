@@ -16,6 +16,8 @@ IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpT
     case protocol::SharedLogOpType::READ_NEXT_B:
     case protocol::SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
         return IndexQuery::kReadNextB;
+    case protocol::SharedLogOpType::READ_MIN:
+        return IndexQuery::kReadNext;
     default:
         UNREACHABLE();
     }
@@ -197,7 +199,7 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
 
 void Index::ProvideIndexData(const IndexDataProto& index_data) {
     DCHECK_EQ(identifier(), index_data.logspace_id());
-    if(first_index_data_ && index_data.has_index_data()){
+    if(first_index_data_ && 0 < index_data.seqnum_halves_size()){
         HVLOG_F(1, "Initialize data_received_seqnum_position with {}", index_data.seqnum_halves().at(0));
         data_received_seqnum_position_ = index_data.seqnum_halves().at(0);
         first_index_data_ = false;
@@ -232,6 +234,67 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
             DCHECK_EQ(data.user_tags.size(),
                       gsl::narrow_cast<size_t>(index_data.user_tag_sizes(i)));
 #endif
+        }
+        tag_iter += num_tags;
+    }
+    while (received_data_.count(data_received_seqnum_position_) > 0) {
+        data_received_seqnum_position_++;
+    }
+}
+
+void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index_node_id) {
+    DCHECK_EQ(identifier(), index_data.logspace_id());
+    if(first_index_data_ && 0 < index_data.seqnum_halves_size()){
+        HVLOG_F(1, "Initialize data_received_seqnum_position with {}", index_data.seqnum_halves().at(0));
+        data_received_seqnum_position_ = index_data.seqnum_halves().at(0);
+        first_index_data_ = false;
+    }
+    uint16_t selected_index_shard = gsl::narrow_cast<uint16_t>(index_data.index_shard());
+    absl::flat_hash_set<uint64_t> min_tags_;
+    int n = index_data.seqnum_halves_size();
+    DCHECK_EQ(n, index_data.engine_ids_size());
+    DCHECK_EQ(n, index_data.user_logspaces_size());
+    DCHECK_EQ(n, index_data.user_tag_sizes_size());
+    uint32_t total_tags = absl::c_accumulate(index_data.user_tag_sizes(), 0U);
+    DCHECK_EQ(static_cast<int>(total_tags), index_data.user_tags_size());
+    auto tag_iter = index_data.user_tags().begin();
+    for (int i = 0; i < n; i++) {
+        size_t num_tags = index_data.user_tag_sizes(i);
+        uint32_t seqnum = index_data.seqnum_halves(i);
+        if (seqnum < indexed_seqnum_position_) {
+            HVLOG_F(1, "Seqnum={} lower than IndexedSeqnumPosition={}", seqnum, indexed_seqnum_position_);
+            tag_iter += num_tags;
+            continue;
+        }
+        if (received_data_.count(seqnum) == 0) {
+            auto tags = UserTagVec(tag_iter, tag_iter + num_tags);
+            std::vector<uint64_t> filtered_tags;
+            for(uint64_t tag : tags){
+                if (min_tags_.contains(tag)){
+                    if(view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(selected_index_shard)){
+                        filtered_tags.push_back(tag);
+                    }
+                } else {
+                    min_tags_.insert(tag);
+                    uint16_t index_shard = gsl::narrow_cast<uint16_t>(tag % view_->num_index_shards());
+                    if(view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(index_shard)){
+                        filtered_tags.push_back(tag);
+                    }
+                }
+            }
+            if (0 < filtered_tags.size()) {
+                received_data_[seqnum] = IndexData {
+                    .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
+                    .user_logspace = index_data.user_logspaces(i),
+                    .user_tags     = UserTagVec(filtered_tags.begin(), filtered_tags.end()),
+                    .skip = false
+                };
+            } else {
+                TryCreateIndex(index_data.user_logspaces(i));
+                received_data_[seqnum] = IndexData {
+                    .skip = true
+                };
+            }
         }
         tag_iter += num_tags;
     }
@@ -364,7 +427,7 @@ void Index::AdvanceIndexProgress() {
     }
 }
 
-bool Index::AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data) {
+bool Index::AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data, uint16_t my_index_node_id) {
     size_t c = 0;
     for(const uint16_t& storage_shard : storage_shards){
         for(const uint32_t& metalog_position : index_data.metalog_positions()){
@@ -379,22 +442,19 @@ bool Index::AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const In
         return false;
     }
     HVLOG(1) << "IndexUpdate: Advance index progress";
-    if(index_data.has_index_data()){
+    if(0 < index_data.seqnum_halves_size()){
         HVLOG(1) << "IndexUpdate: Contains index data";
-        ProvideIndexData(index_data);
+        ProvideIndexData(index_data, my_index_node_id);
         auto iter = received_data_.begin();
         while (iter != received_data_.end()) {
             uint32_t seqnum = iter->first;
             const IndexData& index_data = iter->second;
-            GetOrCreateIndex(index_data.user_logspace)->Add(
-                seqnum, index_data.engine_id, index_data.user_tags);
+            if(!index_data.skip){
+                GetOrCreateIndex(index_data.user_logspace)->Add(
+                    seqnum, index_data.engine_id, index_data.user_tags);
+            }
             iter = received_data_.erase(iter);
         }
-    } else {
-        HVLOG(1) << "IndexUpdate: Contains only meta data";
-        for(uint32_t user_logspace : index_data.user_logspaces()){
-            TryCreateIndex(user_logspace);
-        }   
     }
     if(TryCompleteIndexUpdates()){
         if (!blocking_reads_.empty()) {

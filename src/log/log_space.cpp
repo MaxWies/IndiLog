@@ -342,7 +342,6 @@ std::optional<IndexDataProto> LogStorage::PollIndexData() {
         // we need at least the metadata
         IndexDataProto data;
         data.set_logspace_id(identifier());
-        data.set_has_index_data(false);
         data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
         return data;
     }
@@ -351,7 +350,6 @@ std::optional<IndexDataProto> LogStorage::PollIndexData() {
     index_data_.Clear();
     index_data_.set_logspace_id(identifier());
     // necessary to update metalog relevant data in index tier
-    data.set_has_index_data(true);
     data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
     return data;
 }

@@ -78,11 +78,13 @@ View::View(const ViewProto& view_proto)
     DCHECK_EQ(static_cast<size_t>(view_proto.index_tier_plan_size()),
               num_index_shards_ * index_replicas_);
     absl::flat_hash_map<size_t, std::vector<uint16_t>> index_shard_nodes_tmp;
+    absl::flat_hash_map<uint16_t, absl::flat_hash_set<uint16_t>> index_shard_memberships;
     for (size_t i = 0; i < num_index_shards_; i++) {
         for (size_t j = 0; j < index_replicas_; j++) {
             uint16_t index_node_id = gsl::narrow_cast<uint16_t>(
                 view_proto.index_tier_plan(static_cast<int>(i * index_replicas_ + j)));
             index_shard_nodes_tmp[i].push_back(index_node_id);
+            index_shard_memberships[index_node_id].insert(gsl::narrow_cast<uint16_t>(i));
         }
     }
     std::vector<NodeIdVec> index_shard_nodes;
@@ -161,7 +163,9 @@ View::View(const ViewProto& view_proto)
         uint16_t node_id = index_node_ids_[i];
         indexes_.push_back(Index(
             this, node_id,
-            storage_nodes));
+            storage_nodes,
+            index_shard_memberships.at(node_id))
+        );
     }
     for (size_t i = 0; i < num_index_nodes; i++) {
         index_nodes_[index_node_ids_[i]] = &indexes_[i];
@@ -222,11 +226,14 @@ View::Storage::Storage(const View* view, uint16_t node_id, const ShardIdVec stor
       }
 
 View::Index::Index(const View* view, uint16_t node_id,
-                   const absl::flat_hash_map<uint32_t, std::vector<uint16_t>>& per_shard_storage_nodes)
+                   const absl::flat_hash_map<uint32_t, std::vector<uint16_t>>& per_shard_storage_nodes,
+                   const absl::flat_hash_set<uint16_t>& index_shards_)
     : view_(view),
       node_id_(node_id),
       per_shard_storage_nodes_(per_shard_storage_nodes.begin(),
-                            per_shard_storage_nodes.end()){
+                            per_shard_storage_nodes.end()),
+      index_shards_(index_shards_.begin(), index_shards_.end())
+    {
           for(auto const& p : per_shard_storage_nodes){
               next_shard_storage_node_[p.first] = 0;
           }
