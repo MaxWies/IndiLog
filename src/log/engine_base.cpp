@@ -413,7 +413,7 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
             return true;
         }
     }
-    HLOG_F(ERROR, "Failed to send registration request to sequencer={}", destination_id);
+    HLOG_F(ERROR, "Failed to send registration request to destination_id={}", destination_id);
     return false;
 }
 

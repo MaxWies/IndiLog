@@ -11,7 +11,7 @@ using TagSuffix = std::map<uint16_t, TagSuffixLink>;
 class TagEntry{
 
 public:
-    TagEntry(uint64_t seqnum_min, uint16_t storage_shard_id_min, uint64_t popularity);
+    TagEntry(uint64_t seqnum_min, uint16_t storage_shard_id_min, uint64_t popularity, bool complete);
     TagEntry(TagSuffix tag_suffix, uint64_t popularity);
     TagEntry(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
     ~TagEntry();
@@ -21,6 +21,7 @@ public:
     uint64_t seqnum_min_;
     uint16_t shard_id_min_;
     uint64_t popularity_;
+    bool complete_;
 private:
 };
 
@@ -32,7 +33,7 @@ public:
     ~PerSpaceTagCache();
 
     void AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequencer_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
-    void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id);
+    void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity);
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
@@ -48,7 +49,7 @@ private:
     std::string log_header_;
     // tag-key : tag-entry
     absl::flat_hash_map<uint64_t, std::unique_ptr<TagEntry>> tags_;
-    absl::flat_hash_map<uint64_t, std::pair<uint64_t, uint16_t>> pending_seqnum_min_;
+    absl::flat_hash_set<uint64_t> pending_seqnum_min_;
 
     bool TagEntryExists(uint64_t key);
 };

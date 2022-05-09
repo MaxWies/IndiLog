@@ -33,7 +33,9 @@ protected:
     virtual void HandleReadMinRequest(const protocol::SharedLogMessage& request) = 0;
     virtual void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                                         std::span<const char> payload) = 0;
+    virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
     virtual void HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload) = 0;
+    virtual void RemoveEngineNode(uint16_t engine_node_id) = 0;
 
     //virtual void BackgroundThreadMain() = 0;
 
@@ -47,9 +49,11 @@ protected:
     //                          std::span<const char> tags_data);
 
     void SendMasterIndexResult(const IndexQueryResult& result);
-    void SendIndexReadResponse(const IndexQueryResult& result);
+    void SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id);
+    void BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id);
     void SendIndexReadFailureResponse(const IndexQuery& query,  protocol::SharedLogResultType result);
     bool SendStorageReadRequest(const IndexQueryResult& result, const View::StorageShard* storage_shard_node);
+    void SendRegistrationResponse(const protocol::SharedLogMessage& request, protocol::SharedLogMessage* response);
 
     struct IndexReadOp {
         uint64_t id;
@@ -92,6 +96,8 @@ private:
     server::EgressHub* CreateEgressHub(protocol::ConnType conn_type,
                                        uint16_t dst_node_id,
                                        server::IOWorker* io_worker);
+
+    void OnNodeOffline(node::NodeType node_type, uint16_t node_id) override;
 
     DISALLOW_COPY_AND_ASSIGN(IndexBase);
 };

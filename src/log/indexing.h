@@ -18,6 +18,7 @@ private:
 
     absl::Mutex view_mu_;
     const View* current_view_      ABSL_GUARDED_BY(view_mu_);
+    ViewMutable view_mutable_      ABSL_GUARDED_BY(view_mu_);
     bool current_view_active_        ABSL_GUARDED_BY(view_mu_);
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<Index>
@@ -37,9 +38,12 @@ private:
     void HandleReadMinRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
+    void OnRecvRegistration(const protocol::SharedLogMessage& message) override;
 
     bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
     void HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload) override;
+
+    void RemoveEngineNode(uint16_t engine_node_id) override;
 
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);

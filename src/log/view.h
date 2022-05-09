@@ -343,8 +343,9 @@ private:
 
 class EngineConnection {
 public:
-    EngineConnection(size_t num_storage_nodes) : 
+    EngineConnection(size_t num_storage_nodes, size_t num_index_nodes) : 
         num_storage_nodes_(num_storage_nodes),
+        num_index_nodes_(num_index_nodes),
         local_start_id_(0),
         sequencer_node_(0),
         sequencer_node_set_(false)
@@ -364,12 +365,20 @@ public:
         storage_nodes_.insert(storage_node);
     }
 
+    void AddIndexNode(uint16_t index_node){
+        index_nodes_.insert(index_node);
+    }
+
     bool StorageNodesReady(){
         return storage_nodes_.size() == num_storage_nodes_;
     }
 
+    bool IndexNodesReady(){
+        return storage_nodes_.size() == num_index_nodes_;
+    }
+
     bool IsReady(){
-        return sequencer_node_set_ && StorageNodesReady();
+        return sequencer_node_set_ && StorageNodesReady() && IndexNodesReady();
     }
 
     uint32_t GetLocalStartId(){
@@ -378,9 +387,11 @@ public:
 
 private:
     size_t num_storage_nodes_;
+    size_t num_index_nodes_;
     uint32_t local_start_id_;
 
     absl::flat_hash_set<uint16_t> storage_nodes_;
+    absl::flat_hash_set<uint16_t> index_nodes_;
     uint16_t sequencer_node_;
     bool sequencer_node_set_;
     bool local_start_id_set_;
@@ -432,14 +443,14 @@ public:
         return true;
     }
 
-    void CreateEngineConnection(uint32_t logspace, size_t num_storage_nodes){
+    void CreateEngineConnection(uint32_t logspace, size_t num_storage_nodes, size_t num_index_nodes){
         if(engine_connections_.contains(logspace)){
             // todo: is that ok?
             engine_connections_.erase(logspace);
         }
         engine_connections_.insert({
             logspace,
-            new EngineConnection(num_storage_nodes)
+            new EngineConnection(num_storage_nodes, num_index_nodes)
         });
     }
 
@@ -451,6 +462,16 @@ public:
         EngineConnection* connection = engine_connections_.at(logspace);
         connection->AddStorageNode(storage_node_id);
         return connection->StorageNodesReady();
+    }
+
+    bool UpdateIndexConnections(uint32_t logspace, uint16_t index_node_id){
+        if (!engine_connections_.contains(logspace)){
+            LOG_F(ERROR, "logspace={} is unknown", logspace);
+            return false;
+        }
+        EngineConnection* connection = engine_connections_.at(logspace);
+        connection->AddIndexNode(index_node_id);
+        return connection->IndexNodesReady();
     }
 
     bool UpdateSequencerConnection(uint32_t logspace, uint16_t sequencer_node_id, uint32_t local_start_id){
@@ -486,7 +507,40 @@ public:
     void Reset(){
         NOT_IMPLEMENTED();
         // set everything on empty
+    }
+
+    void InitializeCurrentEngineNodeIds(uint16_t sequencer_id) {
+        if (per_sequencer_engine_ids.contains(sequencer_id)){
+            per_sequencer_engine_ids.at(sequencer_id).clear();
+        } 
+        per_sequencer_engine_ids.insert({sequencer_id, {}});
+    }
+
+    bool PutCurrentEngineNodeId(uint16_t sequencer_id, uint16_t engine_node_id) {
+        if (!per_sequencer_engine_ids.contains(sequencer_id)){
+            LOG_F(FATAL, "Sequencer id {} is not known", sequencer_id);
+        }
+        if (per_sequencer_engine_ids.at(sequencer_id).contains(engine_node_id)){
+            return false;
+        }
+        per_sequencer_engine_ids.at(sequencer_id).insert(engine_node_id);
+        return true;
     } 
+
+    void RemoveCurrentEngineNodeId(uint16_t engine_node_id) {
+        for (auto& [sequencer_id, engine_ids] : per_sequencer_engine_ids){
+            if (engine_ids.contains(engine_node_id)){
+                engine_ids.erase(engine_node_id);
+            }
+        }
+    } 
+
+    absl::flat_hash_set<uint16_t> GetCurrentEngineNodeIds(uint16_t sequencer_id) const {
+        if (!per_sequencer_engine_ids.contains(sequencer_id)){
+            LOG_F(FATAL, "Sequencer id {} is not known", sequencer_id);
+        }
+        return per_sequencer_engine_ids.at(sequencer_id);
+    }
 
 private:
     // used in storages and sequencers
@@ -494,6 +548,8 @@ private:
     // used in engines
     absl::flat_hash_map</*logspace_id*/uint32_t, EngineConnection*> engine_connections_;
     absl::flat_hash_map</*logspace_id*/uint32_t, const View::StorageShard*>  my_storage_shards_;
+    // used in index
+    absl::flat_hash_map<uint16_t, absl::flat_hash_set<uint16_t>> per_sequencer_engine_ids;
 
     DISALLOW_COPY_AND_ASSIGN(ViewMutable);
 };

@@ -56,7 +56,8 @@ void Engine::OnViewCreated(const View* view) {
             }
             view_mutable_.CreateEngineConnection(
                 bits::JoinTwo16(view->id(), sequencer_id), 
-                view->num_storage_nodes()
+                view->num_storage_nodes(),
+                view->num_index_nodes()
             );
             // apply for shard
             std::string znode_path_shard_req = fmt::format("storage_shard_req/{}_{}_{}", view->id(), sequencer_id, my_node_id());
@@ -274,27 +275,30 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             locked_producer->LocalAppend(op, &log_metadata.localid);
         }
     }
-    ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
     if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED || op->user_tags.empty() || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
+        ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
         return;
-    }
-    std::vector<uint64_t> tags_without_min_seqnum;
-    {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        uint32_t logspace_id = view->LogSpaceIdentifier(op->user_logspace);
-        auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+    } else {
+        std::vector<uint64_t> tags_without_min_seqnum;
         {
-            auto tag_cache = tag_cache_ptr.Lock();
-            for (uint64_t tag : op->user_tags) {
-                if (!tag_cache->TagExists(op->user_logspace, tag)){
-                    tags_without_min_seqnum.push_back(tag);
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            uint32_t logspace_id = view->LogSpaceIdentifier(op->user_logspace);
+            auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+            {
+                auto tag_cache = tag_cache_ptr.Lock();
+                for (uint64_t tag : op->user_tags) {
+                    if (!tag_cache->TagExists(op->user_logspace, tag)){
+                        tags_without_min_seqnum.push_back(tag);
+                    }
                 }
             }
         }
-    }
-    for (uint64_t tag : tags_without_min_seqnum) {
-        HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
-        HandleIndexTierMinSeqnumRead(op, tag, view->id(), storage_shard);
+        for (uint64_t tag : tags_without_min_seqnum) {
+            HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
+            HandleIndexTierMinSeqnumRead(op, tag, view->id(), storage_shard);
+        }
+        //TODO: min seqnum requests must always reach index node before eventually index update enters index node
+        ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
     }
 }
 
@@ -698,6 +702,11 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             received_message.origin_node_id, current_view_->id(), received_message.view_id);
         return;
     }
+    if(result == protocol::SharedLogResultType::REGISTER_INDEX_FAILED){
+        HLOG_F(ERROR, "Registration at index_node={} failed. registration_view={}, response_view={}", 
+            received_message.origin_node_id, current_view_->id(), received_message.view_id);
+        return;
+    }
     if(result == protocol::SharedLogResultType::REGISTER_SEQUENCER_FAILED){
         HLOG_F(ERROR, "Registration at sequencer_node={} failed. registration_view={}, response_view={}", 
             received_message.origin_node_id, current_view_->id(), received_message.view_id);
@@ -732,8 +741,24 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         HLOG_F(INFO, "Registered at storage node. storage_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
+            // register at index nodes
+            SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(SharedLogResultType::REGISTER_ENGINE,
+                current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id, received_message.local_start_id
+            );
+            const View::NodeIdVec index_node_ids = current_view_->GetIndexNodes();
+            for(uint16_t index_node_id : index_node_ids){
+                HVLOG_F(1, "Send registration request to index node. engine_node={}, index_node_id={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
+                    my_node_id(), index_node_id, current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.local_start_id);
+                SendRegistrationRequest(index_node_id, protocol::ConnType::ENGINE_TO_INDEX, &request);
+            }
+        }
+    }
+    else if (result == protocol::SharedLogResultType::REGISTER_INDEX_OK) {
+        HLOG_F(INFO, "Registered at index node. index_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
+            received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
+        if(view_mutable_.UpdateIndexConnections(logspace_id, received_message.origin_node_id)){
             // unblock at sequencer
-            HLOG(INFO) << "Registered at all storage nodes. Unblock shard at sequencer node";
+            HLOG(INFO) << "Registered at all index nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.shard_id, received_message.engine_node_id,
@@ -764,7 +789,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
                 locked_suffix_chain->Extend(current_view_);
             }
             if(!tag_cache_collection_.LogSpaceExists(received_message.sequencer_id)){
-                tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(received_message.sequencer_id, 10000));
+                tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_tag_cache_cap)));
             }
             auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(received_message.sequencer_id);
             {

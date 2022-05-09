@@ -5,31 +5,40 @@
 namespace faas {
 namespace log {
 
-TagEntry::TagEntry(uint64_t seqnum_min, uint16_t storage_shard_id_min, uint64_t popularity)
+TagEntry::TagEntry(uint64_t seqnum_min, uint16_t storage_shard_id_min, uint64_t popularity, bool complete)
     : seqnum_min_(seqnum_min),
       shard_id_min_(storage_shard_id_min),
-      popularity_(popularity)
+      popularity_(popularity),
+      complete_(complete)
     {}
 TagEntry::TagEntry(TagSuffix tag_suffix, uint64_t popularity)
     : tag_suffix_(tag_suffix.begin(), tag_suffix.end()),
       seqnum_min_(kInvalidLogSeqNum),
       shard_id_min_(0),
-      popularity_(popularity)
-    {}
+      popularity_(popularity),
+      complete_(false)
+    {
+        UNREACHABLE(); //outdated
+    }
 TagEntry::TagEntry(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity)
     : seqnum_min_(kInvalidLogSeqNum),
       shard_id_min_(0),
-      popularity_(popularity)
+      popularity_(popularity),
+      complete_(false)
     {
         //tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, TagSuffixLink{{seqnum, storage_shard_id}});
         //tag_suffix_.at(view_id)
-        tag_suffix_.insert(std::make_pair(view_id, std::map<uint32_t, uint16_t>{std::make_pair(seqnum, storage_shard_id)}));
+        //tag_suffix_.insert(std::make_pair(view_id, std::map<uint32_t, uint16_t>{std::make_pair(seqnum, storage_shard_id)}));
+        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, TagSuffixLink{{seqnum, storage_shard_id}});
     }
+
+TagEntry::~TagEntry(){}
+
  void TagEntry::Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity){
     auto tag_suffix = tag_suffix_.find(view_id);
     if(tag_suffix == tag_suffix_.end()){
-        tag_suffix_.insert(std::make_pair(view_id, std::map<uint32_t, uint16_t>{std::make_pair(seqnum, storage_shard_id)}));
-        //entry->tag_suffix_.emplace_hint(entry->tag_suffix_.end(), view_id, TagSuffixLink{seqnum, storage_shard_id});
+        //tag_suffix_.insert(std::make_pair(view_id, std::map<uint32_t, uint16_t>{std::make_pair(seqnum, storage_shard_id)}));
+        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, TagSuffixLink{{seqnum, storage_shard_id}});
     } else {
         LOG(INFO) << "Append data to existing suffix";
         tag_suffix_.at(view_id).insert({seqnum, storage_shard_id});
@@ -37,7 +46,6 @@ TagEntry::TagEntry(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id,
     }
     popularity_ = popularity;
 }
-TagEntry::~TagEntry(){}
 
 PerSpaceTagCache::PerSpaceTagCache(uint32_t user_logspace)
     : user_logspace_(user_logspace)
@@ -48,28 +56,6 @@ PerSpaceTagCache::PerSpaceTagCache(uint32_t user_logspace)
 PerSpaceTagCache::~PerSpaceTagCache(){}
 
 namespace {
-// static inline void TagEntryAddData(TagEntry* entry, uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity) {
-//     auto tag_suffix = entry->tag_suffix_.find(view_id);
-//     if(tag_suffix == entry->tag_suffix_.end()){
-//         entry->tag_suffix_.insert(std::make_pair(view_id, std::map<uint32_t, uint16_t>{std::make_pair(seqnum, storage_shard_id)}));
-//         //entry->tag_suffix_.emplace_hint(entry->tag_suffix_.end(), view_id, TagSuffixLink{seqnum, storage_shard_id});
-//     } else {
-//         LOG(INFO) << "Append data to existing suffix";
-//         auto tag_suffix_link = entry->tag_suffix_.at(view_id);
-//         tag_suffix_link.insert({seqnum, storage_shard_id});
-//         LOG_F(INFO, "1 sshid{}", entry->tag_suffix_.at(view_id).at(seqnum));
-//         //tag_suffix_link.emplace_hint(tag_suffix_link.end(), seqnum, storage_shard_id);
-//     }
-//     LOG_F(INFO, "2 sshid{}", entry->tag_suffix_.at(view_id).at(seqnum));
-//     entry->popularity_ = popularity;
-// }
-// do not delete
-// static inline void TagEntryAddData(TagEntry entry, uint64_t seqnum_min, uint16_t shard_id_min, uint64_t popularity) {
-//     DCHECK(entry.seqnum_min_ == kInvalidLogSeqNum);
-//     entry.seqnum_min_ = seqnum_min;
-//     entry.shard_id_min_ = shard_id_min;
-//     entry.popularity_ = popularity;
-// }
 static inline bool TagSuffixGetHead(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
     if (suffix.empty()){
         return false;
@@ -170,27 +156,52 @@ void PerSpaceTagCache::AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequ
         TagEntry* tag_entry = new TagEntry(view_id, seqnum, storage_shard_id, popularity);
         tags_[tag].reset(tag_entry);
     }
-    if (tags_.at(tag)->seqnum_min_ == kInvalidLogSeqNum) {
+    if (pending_seqnum_min_.contains(tag)){
         uint64_t min_seqnum;
         uint16_t min_storage_shard_id;
         TagSuffixGetHead(tags_.at(tag)->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id);
-        HandleMinSeqnum(tag, min_seqnum, storage_shard_id);
+        tags_.at(tag)->seqnum_min_ = min_seqnum;
+        tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
+        HVLOG_F(1, "Pending tag={} is updated with min_seqnum={}.", tag, min_seqnum);
+        pending_seqnum_min_.erase(tag);
     }
 }
 
-void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id){
-    if(pending_seqnum_min_.contains(tag)){
-        if (min_seqnum < pending_seqnum_min_.at(tag).first){
+void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity){
+    if (min_seqnum == kInvalidLogSeqNum){
+        // the global min seqnum was invalid, thus the tag is new and complete
+        HVLOG_F(1, "Tag={} is completely new", tag);
+        if(TagEntryExists(tag)){
+            // head gets min
+            HVLOG_F(1, "min_seqnum for tag={} is overwritten with head", tag);
+            uint64_t min_seqnum;
+            uint16_t min_storage_shard_id;
+            if(TagSuffixGetHead(tags_.at(tag)->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id)){
+                tags_.at(tag)->seqnum_min_ = min_seqnum;
+                tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
+                tags_.at(tag)->complete_ = true;
+            } else {
+                UNREACHABLE(); //head should exist
+            }
+        } else {
+            // tag min is pending
+            HVLOG_F(1, "min_seqnum for tag={} not yet received. Tag is pending...", tag);
+            TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ true);
+            tags_[tag].reset(tag_entry);
+            pending_seqnum_min_.insert(tag);
+        }
+    } else if (min_seqnum != kInvalidLogSeqNum) {
+        // min seqnum exists already
+        HVLOG_F(1, "Tag={} exists already", tag);
+        if(TagEntryExists(tag)){
             tags_.at(tag)->seqnum_min_ = min_seqnum;
             tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
         } else {
-            tags_.at(tag)->seqnum_min_ = pending_seqnum_min_.at(tag).first;
-            tags_.at(tag)->shard_id_min_ = pending_seqnum_min_.at(tag).second;
+            TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ false);
+            tags_[tag].reset(tag_entry);
         }
-        HVLOG_F(1, "Inserted min_seqnum={} for tag={}", tags_.at(tag)->seqnum_min_, tag);
-        pending_seqnum_min_.erase(tag);
     } else {
-        pending_seqnum_min_.insert({tag, {min_seqnum, min_storage_shard_id}});
+        UNREACHABLE();
     }
 }
 
@@ -200,6 +211,7 @@ bool PerSpaceTagCache::TagExists(uint64_t tag){
 
 void PerSpaceTagCache::Remove(uint64_t tag, uint64_t popularity){
     if(tags_.at(tag)->popularity_ <= popularity){
+        HVLOG_F(1, "Remove tag {} because its popularity {} is lower|equal than {}", tag, tags_.at(tag)->popularity_, popularity);
         tags_.erase(tag);
     }
 }
@@ -246,12 +258,20 @@ IndexQueryResult::State PerSpaceTagCache::FindPrev(uint64_t query_seqnum, uint64
     }
     // check before suffix head
     if (TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
-        if (query_seqnum < *seqnum) {
-            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
-            return IndexQueryResult::kEmpty;
-        } else if (query_seqnum == *seqnum) {
+        if (query_seqnum == *seqnum) {
             HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum lies on head -> found", user_tag, bits::HexStr0x(query_seqnum));
             return IndexQueryResult::kFound;
+        }
+        else if (query_seqnum < *seqnum) {
+            if (tag_entry.complete_) {
+                *seqnum = tag_entry.seqnum_min_;
+                *storage_shard_id = tag_entry.shard_id_min_;
+                HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): seqnum between min seqnum and suffix for complete tag -> found", user_tag, bits::HexStr0x(query_seqnum));
+                return IndexQueryResult::kFound;
+            } else {
+                HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
+                return IndexQueryResult::kEmpty;
+            }
         }
     } else {
         // if head is empty all is empty
@@ -330,12 +350,17 @@ IndexQueryResult::State PerSpaceTagCache::FindNext(uint64_t query_seqnum, uint64
         HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): seqnum equal|lower than min -> found", user_tag, bits::HexStr0x(query_seqnum));
         return IndexQueryResult::kFound;
     }
-    // check between min seqnum and suffix: gap
+    // check between min seqnum and suffix: gap if incomplete
     if (TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
         if (query_seqnum + 1 < *seqnum) {
-            //gap
-            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
-            return IndexQueryResult::kEmpty;
+            if (tag_entry.complete_){
+                HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies between min seqnum and head for complete tag -> found", user_tag, bits::HexStr0x(query_seqnum));
+                return IndexQueryResult::kFound;
+            } else {
+                //gap
+                HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
+                return IndexQueryResult::kEmpty;
+            }
         } else if (query_seqnum == *seqnum) {
             HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies on head -> found", user_tag, bits::HexStr0x(query_seqnum));
             return IndexQueryResult::kFound;
@@ -404,7 +429,6 @@ IndexQueryResult::State PerSpaceTagCache::FindNext(uint64_t query_seqnum, uint64
 TagCacheView::TagCacheView(uint16_t view_id)
     : view_id_(view_id),
       metalog_position_(0)
-    //   data_received_seqnum_position_(0)
     {
         log_header_ = fmt::format("TagCacheView[{}]: ", view_id);
     }
@@ -486,11 +510,6 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
     if (!views_.at(view_id)->CheckIfNewIndexData(index_data)) {
         return;
     }
-    // if (view.first_index_data_ && index_data.has_index_data()){
-    //     HVLOG_F(1, "Initialize data_received_seqnum_position with {}", index_data.seqnum_halves().at(0));
-    //     data_received_seqnum_position_ = index_data.seqnum_halves().at(0);
-    //     view.first_index_data_ = false;
-    // }
     HVLOG(1) << "Receive new index data";
     uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
     int n = index_data.seqnum_halves_size();
@@ -503,11 +522,6 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
         uint32_t seqnum = index_data.seqnum_halves(i);
-        // if (seqnum < seqnum_position_) {
-        //     HVLOG_F(1, "Seqnum={} lower than IndexedSeqnumPosition={}", seqnum, seqnum_position_);
-        //     tag_iter += num_tags;
-        //     continue;
-        // }
         for(size_t j = 0; j < num_tags; j++){
             uint32_t user_logspace = index_data.user_logspaces(i);
             GetOrCreatePerSpaceTagCache(user_logspace)->AddOrUpdate(
@@ -520,9 +534,7 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
             );
             tags_list_.push_front({user_logspace, *tag_iter, popularity});            
         }
-        // data_received_seqnum_position_ += num_tags;
         tag_iter += num_tags;
-        // seqnum_position_ = seqnum;
     }
     Clear();
     // todo: blocking reads
@@ -530,6 +542,7 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
 }
 
 void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto){
+    HVLOG_F(1, "Tag={} with min_seqnum={}", tag, index_result_proto.seqnum());
     if (index_result_proto.found()){
         DCHECK(index_result_proto.seqnum() != kInvalidLogSeqNum);
     } else {
@@ -538,15 +551,17 @@ void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const 
     GetOrCreatePerSpaceTagCache(user_logspace)->HandleMinSeqnum(
         tag,
         index_result_proto.seqnum(),
-        gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id())
+        gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()),
+        sequencer_id_,
+        bits::JoinTwo32(latest_view_id_, latest_metalog_position())
     );
 }
 
 void TagCache::Clear(){
     while(tags_list_.size() > cache_size_){
         auto last_it = tags_list_.end(); last_it--;
-        auto& [logspace, tag, popularity] = *last_it;
-        per_space_cache_.at(logspace)->Remove(tag, popularity);
+        auto& [user_logspace, tag, popularity] = *last_it;
+        per_space_cache_.at(user_logspace)->Remove(tag, popularity);
         tags_list_.pop_back();
     }   
 }
@@ -596,51 +611,6 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
 //                             const std::vector<MetaLogProto>& tail_metalogs) {
 //                                 return true;
 //                             }
-
-// void TagCache::AdvanceIndexProgress() {
-//     while (!cuts_.empty()) {
-//         uint32_t end_seqnum = cuts_.front().second;
-//         if (data_received_seqnum_position_ < end_seqnum) {
-//             HVLOG_F(1, "DataReceivedSeqnumPosition={} is lower then endSeqnum={} of cut.", bits::HexStr0x(data_received_seqnum_position_), bits::HexStr0x(end_seqnum));
-//             break;
-//         }
-//         HVLOG_F(1, "Apply IndexData until seqnum {}", bits::HexStr0x(end_seqnum));
-//         auto iter = received_data_.begin();
-//         while (iter != received_data_.end()) {
-//             uint32_t seqnum = iter->first;
-//             if (seqnum >= end_seqnum) {
-//                 break;
-//             }
-//             const IndexData& index_data = iter->second;
-//             GetOrCreateIndex(index_data.user_logspace)->Add(
-//                 seqnum, index_data.engine_id, index_data.user_tags);
-//             iter = received_data_.erase(iter);
-//         }
-//         DCHECK_GT(end_seqnum, indexed_seqnum_position_);
-//         indexed_seqnum_position_ = end_seqnum;
-//         uint32_t metalog_seqnum = cuts_.front().first;
-//         indexed_metalog_position_ = metalog_seqnum + 1;
-//         cuts_.pop_front();
-//     }
-//     // process pending queries
-//     auto iter = pending_queries_.begin();
-//     while (iter != pending_queries_.end()) {
-//         if (iter->first > indexed_metalog_position_) {
-//             break;
-//         }
-//         const IndexQuery& query = iter->second;
-//         ProcessQuery(query);
-//         iter = pending_queries_.erase(iter);
-//     }
-//     // delete unpopular data
-//     // strategy: LRU without batching
-//     while(tags_list_.size() > cache_size_){
-//         auto last_it = tags_list_.end(); last_it--;
-//         auto& [logspace, tag, popularity] = *last_it;
-//         per_space_cache_.at(logspace)->Remove(tag, popularity);
-//         tags_list_.pop_back();
-//     }
-// }
 
 //TODO: on finalized
 

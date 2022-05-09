@@ -130,6 +130,8 @@ enum class SharedLogResultType : uint16_t {
     REGISTER_SEQUENCER_OK = 0x44,
     REGISTER_SEQUENCER_FAILED = 0x45,
     REGISTER_UNBLOCK = 0x46,
+    REGISTER_INDEX_OK = 0x47,
+    REGISTER_INDEX_FAILED = 0x48
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();

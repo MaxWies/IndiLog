@@ -71,6 +71,7 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_MIN)
+     || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REGISTER)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_INDEX_RESULT)
      || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_PREV_INDEX_RESULT)
@@ -102,6 +103,9 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
         break;
     case SharedLogOpType::READ_MIN:
         HandleReadMinRequest(message);
+        break;
+    case SharedLogOpType::REGISTER:
+        OnRecvRegistration(message);
         break;
     default:
         LOG(ERROR) << "Operation type unknown";
@@ -152,14 +156,18 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     }
 }
 
-//not used so far
-void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
-    uint16_t engine_id = result.original_query.origin_node_id;
-    //SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
-    SharedLogMessage response = SharedLogMessageHelper::NewResponse(protocol::SharedLogResultType::INDEX_OK);
+void IndexBase::SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id) {
+    protocol::SharedLogResultType result_type;
+    if (result.original_query.min_seqnum_query){
+        result_type = protocol::SharedLogResultType::INDEX_MIN_OK;
+    } else {
+        result_type = protocol::SharedLogResultType::INDEX_OK;
+    }
+    SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
     response.client_data = result.original_query.client_data;
+    response.logspace_id = logspace_id;
     response.user_logspace = result.original_query.user_logspace;
     response.query_tag = result.original_query.user_tag;
     response.query_seqnum = result.original_query.query_seqnum;
@@ -168,11 +176,44 @@ void IndexBase::SendIndexReadResponse(const IndexQueryResult& result) {
     response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
     std::string payload = SerializedIndexResult(result);
     response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+    uint16_t engine_id = result.original_query.origin_node_id;
     bool success = SendSharedLogMessage(
         protocol::ConnType::INDEX_TO_ENGINE,
         engine_id, response, payload);
     if (!success) {
         HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_id);
+    }
+}
+
+void IndexBase::BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id) {
+    protocol::SharedLogResultType result_type;
+    if (result.original_query.min_seqnum_query){
+        result_type = protocol::SharedLogResultType::INDEX_MIN_OK;
+    } else {
+        result_type = protocol::SharedLogResultType::INDEX_OK;
+    }
+    SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
+    response.origin_node_id = my_node_id();
+    response.hop_times = result.original_query.hop_times + 1;
+    response.client_data = result.original_query.client_data;
+    response.logspace_id = logspace_id;
+    response.user_logspace = result.original_query.user_logspace;
+    response.query_tag = result.original_query.user_tag;
+    response.query_seqnum = result.original_query.query_seqnum;
+    response.prev_view_id = result.original_query.prev_found_result.view_id;
+    response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
+    response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
+    std::string payload = SerializedIndexResult(result);
+    response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+    bool success = true;
+    for (uint16_t engine_id : engine_ids){
+        success &= SendSharedLogMessage(
+            protocol::ConnType::INDEX_TO_ENGINE,
+            engine_id, response, payload
+        );
+    }
+    if (!success) {
+        HLOG(WARNING) << "IndexRead: Failed to send index read response to all engines";
     }
 }
 
@@ -215,6 +256,13 @@ bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
         }
     }
     return false;
+}
+
+void IndexBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
+    response->origin_node_id = node_id_;
+    response->hop_times = request.hop_times + 1;
+    response->payload_size = 0;
+    SendSharedLogMessage(protocol::ConnType::INDEX_TO_ENGINE, request.origin_node_id, *response);
 }
 
 bool IndexBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
@@ -323,6 +371,25 @@ EgressHub* IndexBase::CreateEgressHub(protocol::ConnType conn_type,
         egress_hubs_[egress_hub->id()] = std::move(egress_hub);
     }
     return hub;
+}
+
+void IndexBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
+    if (node_type != NodeType::kEngineNode) {
+        return;
+    }
+    RemoveEngineNode(node_id);
+    int egress_hub_id = GetEgressHubTypeId(protocol::ConnType::INDEX_TO_ENGINE, node_id);
+    ForEachIOWorker([&] (IOWorker* io_worker) {
+        EgressHub* egress_hub = io_worker->PickConnectionAs<EgressHub>(egress_hub_id);
+        if(egress_hub != nullptr){
+            HLOG(INFO) << "Close egress hub of offline node...";
+            io_worker->ScheduleFunction(nullptr, [egress_hub = egress_hub]{
+                egress_hub->ScheduleClose();
+            });
+            return;
+        }
+        HLOG(INFO) << "This IOWorker had no egress connection for this node";
+    });
 }
 
 }  // namespace log

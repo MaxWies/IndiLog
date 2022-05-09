@@ -12,6 +12,7 @@ namespace log {
 using protocol::SharedLogMessage;
 using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
+using protocol::SharedLogResultType;
 
 IndexNode::IndexNode(uint16_t node_id)
     : IndexBase(node_id),
@@ -39,11 +40,9 @@ void IndexNode::OnViewCreated(const View* view) {
                     continue;
                 }
                 //TODO: currently all index nodes have index for sequencer
-                // if (index_node->HasIndexFor(sequencer_id)) {
                 HLOG_F(INFO, "Create logspace for view {} and sequencer {}", view->id(), sequencer_id);
-                index_collection_.InstallLogSpace(std::make_unique<Index>(
-                    view, sequencer_id));
-                // }
+                index_collection_.InstallLogSpace(std::make_unique<Index>(view, sequencer_id));
+                view_mutable_.InitializeCurrentEngineNodeIds(sequencer_id);
             }
         }
         future_requests_.OnNewView(view, contains_myself ? &ready_requests : nullptr);
@@ -243,6 +242,45 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
     ProcessIndexQueryResults(query_results);
 }
 
+void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
+    DCHECK(SharedLogMessageHelper::GetOpType(received_message) == SharedLogOpType::REGISTER);
+    DCHECK(SharedLogMessageHelper::GetResultType(received_message) == SharedLogResultType::REGISTER_ENGINE);
+    absl::MutexLock view_lk(&view_mu_);
+    if(received_message.view_id != current_view_->id()){
+        HLOG_F(WARNING, "Current view not the same. register_view={}, my_current_view={}", received_message.view_id, current_view_->id());
+        HLOG(WARNING) << "Registration failed";
+        SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+            SharedLogResultType::REGISTER_INDEX_FAILED,
+            current_view_->id(),
+            received_message.sequencer_id,
+            received_message.shard_id,
+            received_message.engine_node_id,
+            received_message.local_start_id
+        );
+        SendRegistrationResponse(received_message, &response);
+        return;
+    }
+    DCHECK_EQ(received_message.origin_node_id, received_message.engine_node_id);
+    if(!view_mutable_.PutCurrentEngineNodeId(received_message.sequencer_id, received_message.engine_node_id)){
+        HLOG_F(WARNING, "Engine with id={} already registered", received_message.engine_node_id);
+    }
+    HLOG_F(INFO, "Registration ok. engine_id={}", received_message.engine_node_id);
+    SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
+            SharedLogResultType::REGISTER_INDEX_OK,
+            received_message.view_id,
+            received_message.sequencer_id,
+            received_message.shard_id,
+            received_message.engine_node_id,
+            received_message.local_start_id
+    );
+    SendRegistrationResponse(received_message, &response);
+}
+
+void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
+    absl::MutexLock view_lk(&view_mu_);
+    view_mutable_.RemoveCurrentEngineNodeId(engine_node_id);
+}
+
 bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
     bool isMyResult = index_node_id_other == my_node_id();
     HVLOG_F(1, "IndexRead: Index result received. my_result={}, index_node={}, engine_node={}, client_key={}", 
@@ -345,7 +383,30 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
 void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
     DCHECK(query_result.state == IndexQueryResult::kFound || query_result.state == IndexQueryResult::kEmpty);
     if (query_result.original_query.min_seqnum_query){
-        SendIndexReadResponse(query_result);
+        if (query_result.found_result.seqnum == kInvalidLogSeqNum){
+            // broadcast new tag
+            uint32_t logspace_id;
+            std::vector<uint16_t> engine_ids;
+            {
+                absl::ReaderMutexLock view_lk(&view_mu_);
+                logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
+                uint16_t seqnum_id = bits::LowHalf32(logspace_id);
+                for (uint16_t engine_node_id : view_mutable_.GetCurrentEngineNodeIds(seqnum_id)){
+                    engine_ids.push_back(engine_node_id);
+                }
+            }
+            HVLOG_F(1, "Tag={} is new. Broadcast to {} nodes on compute tier", query_result.original_query.user_tag, engine_ids.size());
+            BroadcastIndexReadResponse(query_result, engine_ids, logspace_id);
+        } else {
+            // send response to engine node
+            HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", query_result.original_query.user_tag, query_result.original_query.origin_node_id);
+            uint32_t logspace_id;
+            {
+                absl::ReaderMutexLock view_lk(&view_mu_);
+                logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
+            }
+            SendIndexReadResponse(query_result, logspace_id);
+        }
         return;
     }
     if (IsSlave(query_result.original_query)){
@@ -406,12 +467,14 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
 void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     DCHECK(query_result.state == IndexQueryResult::kFound);
     const View::StorageShard* storage_shard = nullptr;
+    uint32_t logspace_id;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         uint16_t view_id = query_result.found_result.view_id;
         if (view_id < views_.size()) {
             const View* view = views_.at(view_id);
             storage_shard = view->GetStorageShard(query_result.StorageShardId());
+            logspace_id = view->LogSpaceIdentifier(query_result.original_query.user_logspace);
         } else {
             HLOG_F(FATAL, "IndexRead: Cannot find view {}", view_id);
         }
@@ -419,7 +482,7 @@ void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     bool success = SendStorageReadRequest(query_result, storage_shard);
     if (success) {
         //Todo: a bit shady here
-        SendIndexReadResponse(query_result);
+        SendIndexReadResponse(query_result, logspace_id);
     }
     if (!success) {
         uint64_t seqnum = query_result.found_result.seqnum;
