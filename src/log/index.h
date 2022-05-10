@@ -26,7 +26,9 @@ struct IndexQuery {
 
     uint16_t master_node_id;
 
+    // todo: refactor, only for min queries in index tier
     bool min_seqnum_query;
+    uint64_t tail_seqnum;
 
     IndexFoundResult prev_found_result;
 
@@ -65,10 +67,10 @@ public:
     void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
 
     void AdvanceIndexProgress();
-    bool AdvanceIndexProgress(const View::NodeIdVec& storage_shards, const IndexDataProto& index_data, uint16_t my_index_node_id);
+    bool AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_index_node_id);
 
     bool TryCompleteIndexUpdates();
-    bool TryAddToIndexUpdates(uint32_t metalog_position, uint16_t storage_shard_id);
+    bool CheckIfNewIndexData(const IndexDataProto& index_data);
 
     uint32_t indexed_metalog_position(){
         return indexed_metalog_position_;
@@ -94,8 +96,7 @@ private:
     bool first_index_data_; // for local indexing
 
     // for index tier
-    size_t number_storage_shards_;
-    absl::flat_hash_map<uint32_t /* metalog_position */, absl::flat_hash_set<uint16_t>> storage_shards_index_updates_;
+    absl::flat_hash_map<uint32_t /* metalog_position */, std::pair<size_t, absl::flat_hash_set<uint16_t>>> storage_shards_index_updates_;
 
     struct IndexData {
         uint16_t   engine_id;

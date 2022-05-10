@@ -180,8 +180,6 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
                 tags_.at(tag)->seqnum_min_ = min_seqnum;
                 tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
                 tags_.at(tag)->complete_ = true;
-            } else {
-                UNREACHABLE(); //head should exist
             }
         } else {
             // tag min is pending
@@ -461,12 +459,6 @@ bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
             });
             DCHECK(0 < storage_shards_index_updates_.size());
             index_data_new = true;
-            if(!storage_shards_index_updates_.contains(metalog_position)){
-                HVLOG(1) << "Super strange";
-            }
-            if(!storage_shards_index_updates_.contains(metalog_position_+1)){
-                HVLOG(1) << "Super super strange";
-            }
         }
     }
     return index_data_new;

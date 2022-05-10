@@ -167,7 +167,6 @@ void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
     DCHECK(op_type == SharedLogOpType::READ_MIN);
     IndexQuery query = BuildIndexQuery(request, request.origin_node_id);
-    query.min_seqnum_query = true;
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -175,7 +174,7 @@ void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
         index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
     }
     if (index_ptr != nullptr) {
-        HVLOG_F(1, "IndexRead: Make query for min seqnum. logspace={}, tag={}, seqnum={}", bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, bits::HexStr0x(query.query_seqnum));
+        HVLOG_F(1, "IndexRead: Make query for min seqnum. seqnum={}, logspace={}, tag={}", bits::HexStr0x(query.query_seqnum), request.logspace_id, query.user_tag);
         Index::QueryResultVec query_results;
         {
             auto locked_index = index_ptr.Lock();
@@ -192,7 +191,7 @@ void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
 void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
-    HVLOG_F(1, "IndexUpdate: Index data received from index_node={}", message.origin_node_id);
+    HVLOG_F(1, "IndexUpdate: Index data received from storage_node={}", message.origin_node_id);
     IndexDataProto index_data_proto;
     if (!index_data_proto.ParseFromArray(payload.data(),
                                          static_cast<int>(payload.size()))) {
@@ -231,7 +230,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
                 LOG(WARNING) << "IndexUpdate: Index update from old metalog";
                 return;
             }
-            if(!locked_index->AdvanceIndexProgress(storage_shards, index_data_proto, my_node_id())){
+            if(!locked_index->AdvanceIndexProgress(index_data_proto, my_node_id())){
                 HVLOG(1) << "IndexUpdate: Do not process query results because metalog did not increase";
                 return;
             }
@@ -383,7 +382,7 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
 void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
     DCHECK(query_result.state == IndexQueryResult::kFound || query_result.state == IndexQueryResult::kEmpty);
     if (query_result.original_query.min_seqnum_query){
-        if (query_result.found_result.seqnum == kInvalidLogSeqNum){
+        if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
             // broadcast new tag
             uint32_t logspace_id;
             std::vector<uint16_t> engine_ids;
@@ -399,7 +398,9 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
             BroadcastIndexReadResponse(query_result, engine_ids, logspace_id);
         } else {
             // send response to engine node
-            HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", query_result.original_query.user_tag, query_result.original_query.origin_node_id);
+            HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", 
+                query_result.original_query.user_tag, query_result.found_result.seqnum, query_result.original_query.origin_node_id
+            );
             uint32_t logspace_id;
             {
                 absl::ReaderMutexLock view_lk(&view_mu_);
@@ -573,6 +574,15 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
             .view_id = message.prev_view_id,
             .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
+        };
+    }
+    if (op_type == SharedLogOpType::READ_MIN) {
+        index_query.min_seqnum_query = true;
+        index_query.tail_seqnum = message.tail_seqnum;
+        index_query.prev_found_result = IndexFoundResult {
+            .view_id = 0,
+            .storage_shard_id = 0,
+            .seqnum = 0
         };
     }
     return index_query;

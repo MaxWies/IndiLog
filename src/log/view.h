@@ -374,7 +374,7 @@ public:
     }
 
     bool IndexNodesReady(){
-        return storage_nodes_.size() == num_index_nodes_;
+        return index_nodes_.size() == num_index_nodes_;
     }
 
     bool IsReady(){
@@ -461,7 +461,7 @@ public:
         }
         EngineConnection* connection = engine_connections_.at(logspace);
         connection->AddStorageNode(storage_node_id);
-        return connection->StorageNodesReady();
+        return connection->IsReady();
     }
 
     bool UpdateIndexConnections(uint32_t logspace, uint16_t index_node_id){
@@ -471,7 +471,7 @@ public:
         }
         EngineConnection* connection = engine_connections_.at(logspace);
         connection->AddIndexNode(index_node_id);
-        return connection->IndexNodesReady();
+        return connection->IsReady();
     }
 
     bool UpdateSequencerConnection(uint32_t logspace, uint16_t sequencer_node_id, uint32_t local_start_id){

@@ -307,7 +307,10 @@ struct SharedLogMessage {
     };
     uint64_t client_data;       // [48:56]
 
-    uint64_t prev_found_seqnum; // [56:64]
+    union {
+        uint64_t prev_found_seqnum; // [56:64]
+        uint64_t tail_seqnum;       // [56:64] (only used by Index Tier MIN requests)
+    };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
 

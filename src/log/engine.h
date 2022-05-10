@@ -58,7 +58,7 @@ private:
     void HandleLocalSetAuxData(LocalOp* op) override;
 
     void HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::StorageShard* storage_shard);
-    void HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, const View::StorageShard* storage_shard);
+    void HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, uint64_t log_tail_seqnum, const View::StorageShard* storage_shard);
     void ProcessLocalIndexMisses(const Index::QueryResultVec& miss_results, uint32_t logspace_id);
 
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
@@ -90,7 +90,7 @@ private:
 
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t master_node_id);
-    protocol::SharedLogMessage BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag);
+    protocol::SharedLogMessage BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag, uint64_t log_tail_seqnum);
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
     IndexQuery BuildIndexQuery(LocalOp* op);
