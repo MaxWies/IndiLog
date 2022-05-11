@@ -72,6 +72,15 @@ void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
     }
     (--suffix_chain_.end())->second->ProvideMetaLog(metalog_proto);
     current_entries_++;
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        if (iter->first > metalog_position()) {
+            break;
+        }
+        const IndexQuery& query = iter->second;
+        ProcessQuery(query);
+        iter = pending_queries_.erase(iter);
+    }
     if (max_suffix_seq_entries_ < current_entries_){
         size_t counter = gsl::narrow_cast<size_t>(std::round(current_entries_ * trim_level_));
         size_t counter_copy = counter;
@@ -85,9 +94,9 @@ void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
     }
 }
 
-IndexQueryResult SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
+void SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
     if(suffix_chain_.empty()){
-        return BuildNotFoundResult(query);
+        pending_query_results_.push_back(BuildNotFoundResult(query));
     }
     uint16_t query_view_id = log_utils::GetViewId(query.metalog_progress);
     if (query_view_id > view_id()){
@@ -96,10 +105,25 @@ IndexQueryResult SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
     if (query_view_id == view_id()){
         uint32_t position = bits::LowHalf64(query.metalog_progress);
         if (metalog_position() < position){
-            LOG(FATAL) << "Future metalog impossible";
+            HLOG_F(INFO, "Future metalog {}. My metalog_position is {}", position, metalog_position());
+            pending_queries_.insert(std::make_pair(position, query));
         }
     }
-    return ProcessQuery(query);
+    pending_query_results_.push_back(ProcessQuery(query));
+}
+
+void SeqnumSuffixChain::PollQueryResults(QueryResultVec* results) {
+    if (pending_query_results_.empty()) {
+        return;
+    }
+    if (results->empty()) {
+        *results = std::move(pending_query_results_);
+    } else {
+        results->insert(results->end(),
+                        pending_query_results_.begin(),
+                        pending_query_results_.end());
+    }
+    pending_query_results_.clear();
 }
 
 size_t SeqnumSuffixChain::ComputeSize(){
@@ -343,41 +367,37 @@ SeqnumSuffixLink::SeqnumSuffixLink(const View* view, uint16_t sequencer_id)
 SeqnumSuffixLink::~SeqnumSuffixLink() {}
 
 namespace {
-static inline uint16_t FindStorageShardIdInLinkEntry(const LinkEntry entry, uint32_t query_seqnum) {
-    uint16_t progress_shards = 0;
-    for(size_t i = 0; i < entry.progress_.size(); i++){
-        if(entry.progress_.at(i)){
-            if(query_seqnum <= entry.seqnum_upper_bounds_.at(progress_shards)){
-                return gsl::narrow_cast<uint16_t>(i);
-            }
-            ++progress_shards;
-        }
+static inline uint16_t FindStorageShardIdInLinkEntry(uint32_t key_seqnum, const LinkEntry entry, uint32_t query_seqnum) {
+    if (query_seqnum > key_seqnum) {
+        LOG_F(WARNING, "Query_seqnum={} is higher than key_seqnum={} of LinkEntry. Result returned is not valid!", query_seqnum, key_seqnum);
+        return entry.storage_shard_ids_.at(0);
     }
-    return entry.highest_shard_pos_;
+    uint8_t diff = gsl::narrow_cast<uint8_t>(key_seqnum-query_seqnum);
+    auto it = std::upper_bound(entry.key_diffs_.begin(), entry.key_diffs_.end(), diff);
+    if (it == entry.key_diffs_.end()){
+        return entry.storage_shard_ids_.back();
+    }
+    size_t ix = gsl::narrow_cast<size_t>(std::distance(entry.key_diffs_.begin(), it));
+    return entry.storage_shard_ids_.at(ix);
 }
 } // namespace
 
 bool SeqnumSuffixLink::IsEmpty() {
     return entries_.empty();
 }
-void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_cuts) {
-    DCHECK(!productive_cuts.empty());
-    uint32_t seqnum_key = productive_cuts.back().second;
-    uint16_t highest_productive_shard = productive_cuts.back().first;
-    HVLOG_F(1, "New logs received. seqnum_key={}, highest_prod_shard={}, prod_shards={}", 
-     bits::HexStr0x(seqnum_key), highest_productive_shard, productive_cuts.size()
+void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_shards) {
+    DCHECK(!productive_shards.empty());
+    uint32_t seqnum_key = productive_shards.back().second;
+    uint16_t highest_productive_shard = productive_shards.back().first;
+    HVLOG_F(1, "New logs received. seqnum_key={}, prod_shards={}, highest_prod_shard={}", 
+     bits::HexStr0x(seqnum_key), productive_shards.size(), highest_productive_shard
     );
-    DCHECK(0 <= highest_productive_shard);
-    if(highest_productive_shard < 1) {
-        entries_.emplace_hint(entries_.end(), seqnum_key, highest_productive_shard);
-        return;
-    }
-    DCHECK(2 <= productive_cuts.size());
+    DCHECK(1 <= productive_shards.size());
     entries_.emplace_hint(
         entries_.end(),
         std::piecewise_construct,
         std::forward_as_tuple(seqnum_key),
-        std::forward_as_tuple(highest_productive_shard, productive_cuts)
+        std::forward_as_tuple(productive_shards)
     );
 }
 
@@ -426,25 +446,25 @@ size_t SeqnumSuffixLink::NumEntries(){
 }
 
 void SeqnumSuffixLink::GetHead(uint64_t* seqnum, uint16_t* storage_shard_id){
+    // the head is the bound of the lowest productive shard of the first entry
     DCHECK(!entries_.empty());
+    uint32_t key = entries_.begin()->first;
     LinkEntry entry = entries_.begin()->second;
-    for(size_t i = 0; i < entry.progress_.size(); i++){
-        if (entry.progress_[i]){
-            *seqnum = bits::JoinTwo32(identifier(), entry.seqnum_upper_bounds_.at(i));
-            *storage_shard_id = gsl::narrow_cast<uint16_t>(i);
-            return;
-        }
+    if(0 < entry.key_diffs_.size()){
+        *seqnum = bits::JoinTwo32(identifier(), key - uint32_t(entry.key_diffs_.back()));
+        *storage_shard_id = entry.storage_shard_ids_.back();
+    } else {
+        *seqnum = bits::JoinTwo32(identifier(), key);
+        *storage_shard_id = entry.storage_shard_ids_.front();
     }
-    *seqnum = bits::JoinTwo32(identifier(), entries_.begin()->first);
-    *storage_shard_id = entry.highest_shard_pos_;
-    return;
 }
 
 void SeqnumSuffixLink::GetTail(uint64_t* seqnum, uint16_t* storage_shard_id){
     DCHECK(!entries_.empty());
+    uint32_t key = (--entries_.end())->first;
     LinkEntry entry = (--entries_.end())->second;
-    *seqnum = bits::JoinTwo32(identifier(), (--entries_.end())->first);
-    *storage_shard_id = entry.highest_shard_pos_;
+    *seqnum = bits::JoinTwo32(identifier(), key);
+    *storage_shard_id = entry.storage_shard_ids_.front();
     return;
 }
 
@@ -457,16 +477,16 @@ bool SeqnumSuffixLink::FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     }
     GetHead(seqnum, storage_shard_id);
     if (query_seqnum + 1 < *seqnum) {
-        HVLOG(1) << ("query seqnum not in my range: before head");
+        HVLOG(1) << ("SuffixRead: query seqnum before head -> empty");
         return false;
     }
     if (query_seqnum == *seqnum || query_seqnum + 1 == *seqnum) {
-        HVLOG(1) << ("query seqnum at my head");
+        HVLOG(1) << ("SuffixRead: query seqnum at my head -> found");
         return true;
     }
     GetTail(seqnum, storage_shard_id);
     if (*seqnum < query_seqnum) {
-        HVLOG(1) << ("query seqnum not in my range: behind tail");
+        HVLOG(1) << ("SuffixRead: Query seqnum behind tail -> empty");
         return false;
     }
     // invariant 1: seqnum lies between head and last element
@@ -477,6 +497,7 @@ bool SeqnumSuffixLink::FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     LinkEntry* entry_upper = nullptr;
     auto it = entries_.upper_bound(local_seqnum);
     DCHECK(it != entries_.end()); // because of invariant
+    uint32_t entry_upper_key = it->first;
     entry_upper = &it->second;
     if (it != entries_.begin() && it != entries_.end()){
         --it;
@@ -486,13 +507,13 @@ bool SeqnumSuffixLink::FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     // check if key match of lower happened
     if (entry_lower != nullptr && local_seqnum == entry_lower_key){
         *seqnum = query_seqnum;
-        *storage_shard_id = entry_lower->highest_shard_pos_;
-        HVLOG(1) << ("query seqnum matches a lower key: found");
+        *storage_shard_id = entry_lower->storage_shard_ids_.front();
+        HVLOG(1) << ("SuffixRead: Query seqnum matches a lower key -> found");
         return true;
     }
     *seqnum = query_seqnum;
-    *storage_shard_id = FindStorageShardIdInLinkEntry(*entry_upper, local_seqnum);
-    HVLOG(1) << ("query seqnum within my range: found");
+    *storage_shard_id = FindStorageShardIdInLinkEntry(entry_upper_key, *entry_upper, local_seqnum);
+    HVLOG(1) << ("SuffixRead: Query seqnum within my range -> found");
     return true;
 }
 
@@ -504,12 +525,12 @@ bool SeqnumSuffixLink::FindPrev(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     }
     GetHead(seqnum, storage_shard_id);
     if (query_seqnum < *seqnum) {
-        HVLOG(1) << ("query seqnum before head: empty");
+        HVLOG(1) << ("SuffixRead: Query seqnum before head -> empty");
         return false;
     }
     GetTail(seqnum, storage_shard_id);
     if (*seqnum <= query_seqnum) {
-        HVLOG(1) << ("query seqnum on or behind my tail: found");
+        HVLOG(1) << ("SuffixRead: Query seqnum on or behind my tail -> found");
         return true;
     }
     // invariant 1: seqnum lies between head and last element
@@ -517,10 +538,11 @@ bool SeqnumSuffixLink::FindPrev(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
     auto it = entries_.lower_bound(local_seqnum);
     DCHECK(it != entries_.end()); // because of invariant
+    uint32_t key = it->first;
     LinkEntry entry = it->second;
     *seqnum = query_seqnum;
-    *storage_shard_id = FindStorageShardIdInLinkEntry(entry, local_seqnum);
-    HVLOG(1) << ("query seqnum within my range: found");
+    *storage_shard_id = FindStorageShardIdInLinkEntry(key, entry, local_seqnum);
+    HVLOG(1) << ("SuffixRead: Query seqnum within my range -> found");
     return true;
 }
 

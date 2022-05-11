@@ -299,7 +299,6 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
             HandleIndexTierMinSeqnumRead(op, tag, view->id(), std::min(uint64_t(0), next_seqnum - 1), storage_shard); // next_seqnum - 1 is the tail
         }
-        //TODO: min seqnum requests must always reach index node before eventually index update enters index node
         ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
     }
 }
@@ -354,55 +353,63 @@ void Engine::HandleLocalRead(LocalOp* op) {
           || op->type == SharedLogOpType::READ_NEXT_B);
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
-    absl::ReaderMutexLock view_lk(&view_mu_);
-    uint32_t logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
-    if(!view_mutable_.GetMyStorageShards().contains(logspace_id)){
+    onging_reads_.PutChecked(op->id, op);
+    uint32_t logspace_id;
+    uint16_t view_id;
+    const View::StorageShard* storage_shard = nullptr;
+    LockablePtr<SeqnumSuffixChain> suffix_chain_ptr;
+    LockablePtr<TagCache> tag_cache_ptr;
+    LockablePtr<Index> index_ptr;
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        ONHOLD_IF_SEEN_FUTURE_VIEW(op);
+        logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
+        if(view_mutable_.GetMyStorageShards().contains(logspace_id)){
+            storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
+        }
+        view_id = current_view_->id();
+        if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+            suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
+            tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+        } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
+            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+        }
+    }
+    if (storage_shard == nullptr){
+        onging_reads_.RemoveChecked(op->id);
+        HLOG(ERROR) << "No storage shard for current view";
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
-    onging_reads_.PutChecked(op->id, op);
-    ONHOLD_IF_SEEN_FUTURE_VIEW(op);
     if (indexing_strategy_ == IndexingStrategy::INDEX_TIER_ONLY){
-        HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+        HandleIndexTierRead(op, view_id, storage_shard);
         return;
     }
     IndexQuery query = BuildIndexQuery(op);
     if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
-        Index::QueryResultVec query_results;
         Index::QueryResultVec local_index_misses;
         // use seqnum suffix
         if(op->query_tag == kEmptyLogTag){
-            LockablePtr<SeqnumSuffixChain> suffix_chain_ptr;
-            {
-                suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
-            }
-            {
-                auto locked_index = suffix_chain_ptr.Lock();
-                query_results.push_back(locked_index->MakeQuery(query));
-            }
-            ProcessIndexQueryResults(query_results, &local_index_misses);
-            if (local_index_misses.size() < 1){
-                return;
-            }
-        }
-        // use seqnum cache
-        if(op->query_tag == kEmptyLogTag && !local_index_misses.empty()){
             Index::QueryResultVec query_results;
-            DCHECK(local_index_misses.size() == 1);
-            local_index_misses.clear(); // only one miss can be later exist
-            query_results.push_back(seqnum_cache_->MakeQuery(query));
+            {
+                auto locked_suffix_chain = suffix_chain_ptr.Lock();
+                locked_suffix_chain->MakeQuery(query);
+                locked_suffix_chain->PollQueryResults(&query_results);
+            }
             ProcessIndexQueryResults(query_results, &local_index_misses);
             if (local_index_misses.size() < 1){
                 return;
             }
-            DCHECK(local_index_misses.size() == 1);
+            // use seqnum cache
+            query_results.clear();
+            for(IndexQueryResult result : local_index_misses){
+                query_results.push_back(seqnum_cache_->MakeQuery(result.original_query));
+            }
+            local_index_misses.clear();
+            ProcessIndexQueryResults(query_results, &local_index_misses);
         }
         // use tag cache
-        if(op->query_tag != kEmptyLogTag){
-            LockablePtr<TagCache> tag_cache_ptr;
-            {
-                tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
-            }
+        else {
             Index::QueryResultVec query_results;
             {
                 auto locked_tag_cache = tag_cache_ptr.Lock();
@@ -410,9 +417,6 @@ void Engine::HandleLocalRead(LocalOp* op) {
                 locked_tag_cache->PollQueryResults(&query_results);
             }
             ProcessIndexQueryResults(query_results, &local_index_misses);
-            if (local_index_misses.size() < 1){
-                return;
-            }
         }
         // Finally send to index tier if misses exist
         if(!local_index_misses.empty()){
@@ -420,10 +424,6 @@ void Engine::HandleLocalRead(LocalOp* op) {
         }
     } else if (indexing_strategy_ == IndexingStrategy::COMPLETE){
         // complete index
-        LockablePtr<Index> index_ptr;
-        {
-            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
-        }
         bool use_complete_index = true;
         if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
             use_complete_index = false;
@@ -449,7 +449,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
             }
         } else {
             HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
-            HandleIndexTierRead(op, current_view_->id(), view_mutable_.GetMyStorageShard(logspace_id));
+            HandleIndexTierRead(op, view_id, storage_shard);
         }
     } else {
         UNREACHABLE();
@@ -535,8 +535,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                 for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                     locked_suffix_chain->ProvideMetaLog(metalog_proto);
                 }
-                DCHECK(metalog_position_producer == locked_suffix_chain->metalog_position());
-                // no polling for suffix
+                locked_suffix_chain->PollQueryResults(&query_results);
             }
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE){
             auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
@@ -559,6 +558,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
 void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
                                 std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
+    HVLOG_F(1, "New index data from storage node {}", message.origin_node_id);
     IndexDataProto index_data_proto;
     if (!index_data_proto.ParseFromArray(payload.data(),
                                          static_cast<int>(payload.size()))) {

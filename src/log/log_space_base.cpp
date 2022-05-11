@@ -47,7 +47,7 @@ bool LogSpaceBase::ProvideMetaLog(const MetaLogProto& meta_log) {
     }
     uint32_t seqnum = meta_log.metalog_seqnum();
     if (seqnum < metalog_position_) {
-        HLOG_F(WARNING, "MetalogUpdate: Cannot apply metalog because metalog_seqnum={} from metalog lower than metalog_position={}", seqnum, metalog_position_);
+        HLOG_F(WARNING, "MetalogUpdate: Cannot apply metalog because metalog metalog_position={} lower than my metalog_position={}", seqnum, metalog_position_);
         return false;
     }
     HVLOG_F(1, "MetalogUpdate: Apply metalog_seqnum={}", seqnum);
@@ -206,7 +206,7 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                 shard_progresses_[active_storage_shard_ids_[i]] = shard_start + delta;
                 start_seqnum += delta;
                 if (0 < delta){
-                    productive_cuts_.push_back(std::make_pair(active_storage_shard_ids_[i], shard_start + delta - 1));
+                    productive_cuts_.push_back(std::make_pair(active_storage_shard_ids_[i], start_seqnum - 1));
                 }
             }
             DCHECK_GT(start_seqnum, seqnum_position_);

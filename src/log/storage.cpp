@@ -214,6 +214,9 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
     ProcessReadResults(results);
     if (index_data.has_value()) {
         SendIndexData(DCHECK_NOTNULL(view), DCHECK_NOTNULL(view_mutable), *index_data);
+    } else {
+        // send always index data (even if only metalog)
+        UNREACHABLE();
     }
 }
 

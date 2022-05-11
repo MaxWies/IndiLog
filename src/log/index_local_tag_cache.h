@@ -39,9 +39,9 @@ public:
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
     bool TagExists(uint64_t tag);
 
-    IndexQueryResult::State FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id,
+    IndexQueryResult::State FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
                                      uint64_t* seqnum, uint16_t* engine_id) const;
-    IndexQueryResult::State FindNext(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id,
+    IndexQueryResult::State FindNext(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
                                      uint64_t* seqnum, uint16_t* engine_id) const;
 
 private:

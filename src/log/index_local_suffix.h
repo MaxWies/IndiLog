@@ -6,8 +6,8 @@
 namespace faas {
 namespace log {
 
-struct LinkEntry {
-    LinkEntry(uint16_t highest_productive_shard, std::vector<std::pair<uint16_t, uint32_t>> productive_shards)
+struct LinkEntryCompressed {
+    LinkEntryCompressed(uint16_t highest_productive_shard, std::vector<std::pair<uint16_t, uint32_t>> productive_shards)
     : highest_shard_pos_(highest_productive_shard),
       progress_(std::vector<bool>(highest_productive_shard, false)),
       seqnum_upper_bounds_(absl::FixedArray<uint32_t>(productive_shards.size()-1, 0)) 
@@ -17,13 +17,32 @@ struct LinkEntry {
             seqnum_upper_bounds_.at(i) = productive_shards.at(i).second;
         }
     }
-    LinkEntry(uint16_t highest_productive_shard)
+    LinkEntryCompressed(uint16_t highest_productive_shard)
     : highest_shard_pos_(highest_productive_shard),
       seqnum_upper_bounds_(absl::FixedArray<uint32_t>{})
     {}
     uint16_t highest_shard_pos_;
     std::vector<bool> progress_;
     absl::FixedArray<uint32_t> seqnum_upper_bounds_;
+};
+
+struct LinkEntry{
+    LinkEntry(std::vector<std::pair<uint16_t, uint32_t>> productive_shards)
+    : storage_shard_ids_(absl::FixedArray<uint16_t>(productive_shards.size(), 0)),
+      key_diffs_(absl::FixedArray<uint8_t>(productive_shards.size()-1, 0))
+    {
+        DCHECK(0 < productive_shards.size());
+        auto& [key_shard, key_seqnum] = productive_shards.back();
+        for(size_t i = productive_shards.size() - 1; i > 0; i--) {
+            auto& [shard, seqnum] = productive_shards.at(i);
+            DCHECK(key_seqnum > seqnum);
+            key_diffs_.at(i-1) = gsl::narrow_cast<uint8_t>(key_seqnum - seqnum);
+            storage_shard_ids_.at(i) = shard;
+        }
+        storage_shard_ids_.at(0) = key_shard;
+    }
+    absl::FixedArray<uint16_t> storage_shard_ids_;
+    absl::FixedArray<uint8_t> key_diffs_;
 };
 
 class SeqnumSuffixLink final : public LogSpaceBase {
@@ -67,6 +86,8 @@ public:
     SeqnumSuffixChain(uint16_t sequence_number_id, size_t max_suffix_seq_entries, float trim_level);
     ~SeqnumSuffixChain();
 
+    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
+
     uint32_t identifier() const {
         return bits::JoinTwo16(0, sequence_number_id_);
     }
@@ -87,7 +108,8 @@ public:
     void Trim(size_t* counter);
     //SuffixSeq* GetLast();
     void ProvideMetaLog(const MetaLogProto& metalog_proto);
-    IndexQueryResult MakeQuery(const IndexQuery& query);
+    void MakeQuery(const IndexQuery& query);
+    void PollQueryResults(QueryResultVec* results);
     size_t ComputeSize();
 
 private:
@@ -97,6 +119,10 @@ private:
     float trim_level_;
     size_t current_entries_;
     std::map<uint16_t, std::unique_ptr<SeqnumSuffixLink>> suffix_chain_;
+
+    std::multimap</* metalog_position */ uint32_t,
+                  IndexQuery> pending_queries_;
+    QueryResultVec pending_query_results_;
 
     bool IsEmpty();
     bool GetHead(uint64_t* head, uint16_t* storage_shard_id);

@@ -364,7 +364,14 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
             HVLOG(1) << "IndexRead: Index result found in index tier. Forward read request";
             ForwardReadRequest(merged_index_query_result);
         } else {
-            HLOG_F(INFO, "IndexRead: No shard was able to find a result for logspace={}, tag={}, seqnum={}", 
+            auto read_direction = "";
+            if(merged_index_query_result.original_query.direction == IndexQuery::ReadDirection::kReadPrev){
+                read_direction = "prev";
+            } else {
+                read_direction = "next";
+            }
+            HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, seqnum={}",
+                read_direction, 
                 merged_index_query_result.original_query.user_logspace, 
                 merged_index_query_result.original_query.user_tag, 
                 merged_index_query_result.original_query.query_seqnum

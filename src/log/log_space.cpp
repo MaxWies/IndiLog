@@ -337,20 +337,10 @@ void LogStorage::PollReadResults(ReadResultVec* results) {
 }
 
 std::optional<IndexDataProto> LogStorage::PollIndexData() {
-    if (index_data_.seqnum_halves_size() == 0) {
-        HVLOG(1) << "MetalogUpdate: No new index data created. Message will only contain metadata";
-        // we need at least the metadata
-        IndexDataProto data;
-        data.set_logspace_id(identifier());
-        data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
-        return data;
-    }
     IndexDataProto data;
     data.Swap(&index_data_);
     index_data_.Clear();
     index_data_.set_logspace_id(identifier());
-    // necessary to update metalog relevant data in index tier
-    data.set_next_seqnum(bits::LowHalf64(seqnum_position()));
     return data;
 }
 

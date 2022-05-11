@@ -247,6 +247,7 @@ void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index
         first_index_data_ = false;
     }
     uint16_t selected_index_shard = gsl::narrow_cast<uint16_t>(index_data.index_shard());
+    bool is_my_turn = view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(selected_index_shard);
     absl::flat_hash_set<uint64_t> min_tags_;
     int n = index_data.seqnum_halves_size();
     DCHECK_EQ(n, index_data.engine_ids_size());
@@ -270,7 +271,7 @@ void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index
             std::vector<uint64_t> filtered_tags;
             for(uint64_t tag : tags){
                 if (min_tags_.contains(tag)){
-                    if(view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(selected_index_shard)){
+                    if(is_my_turn){
                         filtered_tags.push_back(tag);
                     }
                 } else {
@@ -281,7 +282,7 @@ void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index
                     }
                 }
             }
-            if (0 < filtered_tags.size()) {
+            if (0 < filtered_tags.size() || (tags.empty() && is_my_turn)) {
                 received_data_[seqnum] = IndexData {
                     .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
                     .user_logspace = index_data.user_logspaces(i),
