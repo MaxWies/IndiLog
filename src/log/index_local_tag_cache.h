@@ -49,7 +49,7 @@ private:
     std::string log_header_;
     // tag-key : tag-entry
     absl::flat_hash_map<uint64_t, std::unique_ptr<TagEntry>> tags_;
-    absl::flat_hash_set<uint64_t> pending_seqnum_min_;
+    absl::flat_hash_map<uint64_t, std::unique_ptr<TagEntry>> pending_min_tags_;
 
     bool TagEntryExists(uint64_t key);
 };
@@ -136,12 +136,10 @@ private:
     void ProcessQuery(const IndexQuery& query);
     bool ProcessBlockingQuery(const IndexQuery& query);
 
-    IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
+    IndexQueryResult BuildFoundResult(const IndexQuery& query, uint64_t metalog_progress, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
-    IndexQueryResult BuildInvalidResult(const IndexQuery& query);
-    IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
-                                         uint64_t seqnum, uint16_t engine_id);
+    IndexQueryResult BuildNotFoundResult(const IndexQuery& query, uint64_t metalog_progress);
+    IndexQueryResult BuildInvalidResult(const IndexQuery& query, uint64_t metalog_progress);
 
 };
 

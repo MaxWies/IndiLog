@@ -50,49 +50,30 @@ PerSpaceTagCache::PerSpaceTagCache(uint32_t user_logspace)
 PerSpaceTagCache::~PerSpaceTagCache(){}
 
 namespace {
-static inline bool TagSuffixGetHead(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
-    if (suffix.empty()){
-        return false;
-    }
-    for(auto it = suffix.begin(); it != suffix.end(); ++it){
-        if(!it->second.empty()){
-            uint16_t view_id = it->first;
-            TagSuffixLink link = it->second;
-            DCHECK(!link.empty());
-            *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), link.begin()->first);
-            *shard_id = link.begin()->second;
-            return true;
-        } else {
-            LOG_F(WARNING, "Tag suffix has empty link {}", it->first);
-        }
-    }
-    return false;
+static inline void TagSuffixGetHead(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
+    DCHECK(!suffix.empty());
+    uint16_t view_id = suffix.begin()->first;
+    TagSuffixLink link = suffix.begin()->second;
+    DCHECK(!link.empty());
+    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), link.begin()->first);
+    *shard_id = link.begin()->second;
 }
-static inline bool TagSuffixGetTail(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
-    if (suffix.empty()){
-        return false;
-    }
-    for(auto it = suffix.rbegin(); it != suffix.rend(); ++it){
-        if(!it->second.empty()){
-            uint16_t view_id = it->first;
-            TagSuffixLink link = it->second;
-            DCHECK(!link.empty());
-            *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), (--link.end())->first);
-            *shard_id = (--link.end())->second;
-            return true;
-        } else {
-            LOG_F(WARNING, "Tag suffix has empty link {}", it->first);
-        }
-    }
-    return false;
+
+static inline void TagSuffixGetTail(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
+    DCHECK(!suffix.empty());
+    uint16_t view_id = (--suffix.end())->first;
+    TagSuffixLink link = (--suffix.begin())->second;
+    DCHECK(!link.empty());
+    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), (--link.end())->first);
+    *shard_id = (--link.end())->second;
 }
+
 static inline bool TagSuffixLinkFindPrev(const TagSuffixLink& link, uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id){
     DCHECK(!link.empty());
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
     auto it = link.lower_bound(local_seqnum);
     if(it == link.begin()){
         if (it->first < local_seqnum){
-            LOG_F(INFO, "TagSuffixLinkPrev: Tag Link {} seqnums higher than seqnum={}", bits::HighHalf32(identifier), bits::HexStr0x(local_seqnum));
             return false;
         }
     }
@@ -103,34 +84,26 @@ static inline bool TagSuffixLinkFindPrev(const TagSuffixLink& link, uint32_t ide
     *shard_id = it->second;
     return true;
 }
-static inline bool TagSuffixLinkGetTail(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
+static inline void TagSuffixLinkGetTail(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
     DCHECK(!link.empty());
     *seqnum = bits::JoinTwo32(identifier, (--link.end())->first);
     *shard_id = (--link.end())->second;
-    LOG_F(INFO, "Tag Link {} tail at seqnum={}", bits::HighHalf32(identifier), bits::HexStr0x(*seqnum));
-    return true;
 }
 static inline bool TagSuffixLinkFindNext(const TagSuffixLink& link, uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id){
     DCHECK(!link.empty());
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
     auto it = link.lower_bound(local_seqnum);
     if(it == link.end()){
-        LOG_F(INFO, "TagSuffixLinkNext: Tag Link {} seqnums lower than seqnum={}", bits::HighHalf32(identifier), bits::HexStr0x(local_seqnum));
-        uint64_t t;
-        uint16_t s;
-        TagSuffixLinkGetTail(link, identifier, &t, &s);
         return false;
     }
     *seqnum = bits::JoinTwo32(identifier, it->first);
     *shard_id = it->second;
     return true;
 }
-static inline bool TagSuffixLinkGetHead(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
+static inline void TagSuffixLinkGetHead(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
     DCHECK(!link.empty());
     *seqnum = bits::JoinTwo32(identifier, link.begin()->first);
     *shard_id = link.begin()->second;
-    LOG_F(INFO, "Tag Link {} head at seqnum={}", bits::HighHalf32(identifier), bits::HexStr0x(*seqnum));
-    return true;
 }
 } // namespace
 
@@ -142,14 +115,23 @@ void PerSpaceTagCache::AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequ
         TagEntry* tag_entry = new TagEntry(view_id, seqnum, storage_shard_id, popularity);
         tags_[tag].reset(tag_entry);
     }
-    if (pending_seqnum_min_.contains(tag)){
-        uint64_t min_seqnum;
-        uint16_t min_storage_shard_id;
-        TagSuffixGetHead(tags_.at(tag)->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id);
-        tags_.at(tag)->seqnum_min_ = min_seqnum;
-        tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
-        HVLOG_F(1, "Pending tag={} is updated with min_seqnum={}.", tag, min_seqnum);
-        pending_seqnum_min_.erase(tag);
+    if (pending_min_tags_.contains(tag)){
+        TagEntry* stored_tag = tags_.at(tag).get();
+        TagEntry* pending_tag = tags_.at(tag).get();
+        if (pending_tag->seqnum_min_ == kInvalidLogSeqNum) {
+            uint64_t min_seqnum;
+            uint16_t min_storage_shard_id;
+            TagSuffixGetHead(stored_tag->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id);
+            HVLOG_F(1, "Tag={} is updated with min_seqnum={} from its head.", tag, min_seqnum);
+            stored_tag->seqnum_min_ = min_seqnum;
+            stored_tag->shard_id_min_ = min_storage_shard_id;
+        } else {
+            HVLOG_F(1, "Tag={} is updated with min_seqnum={} from pending tag.", tag, pending_tag->seqnum_min_);
+            stored_tag->seqnum_min_ = pending_tag->seqnum_min_;
+            stored_tag->shard_id_min_ = pending_tag->shard_id_min_;
+        }
+        stored_tag->complete_ = pending_tag->complete_;
+        pending_min_tags_.erase(tag);
     }
 }
 
@@ -162,17 +144,17 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
             HVLOG_F(1, "min_seqnum for tag={} is overwritten with head", tag);
             uint64_t min_seqnum;
             uint16_t min_storage_shard_id;
-            if(TagSuffixGetHead(tags_.at(tag)->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id)){
-                tags_.at(tag)->seqnum_min_ = min_seqnum;
-                tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
-                tags_.at(tag)->complete_ = true;
-            }
+            TagSuffixGetHead(tags_.at(tag)->tag_suffix_, sequencer_id, &min_seqnum, &min_storage_shard_id);
+            tags_.at(tag)->seqnum_min_ = min_seqnum;
+            tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
+            tags_.at(tag)->complete_ = true;
         } else {
             // tag min is pending
-            HVLOG_F(1, "min_seqnum for tag={} not yet received. Tag is pending...", tag);
-            TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ true);
-            tags_[tag].reset(tag_entry);
-            pending_seqnum_min_.insert(tag);
+            if (!pending_min_tags_.contains(tag)){
+                HVLOG_F(1, "min_seqnum for tag={} not existed before and not yet received. Tag is pending...", tag);
+                TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ true);
+                pending_min_tags_[tag].reset(tag_entry);
+            }
         }
     } else if (min_seqnum != kInvalidLogSeqNum) {
         // min seqnum exists already
@@ -181,8 +163,10 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
             tags_.at(tag)->seqnum_min_ = min_seqnum;
             tags_.at(tag)->shard_id_min_ = min_storage_shard_id;
         } else {
-            TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ false);
-            tags_[tag].reset(tag_entry);
+            if (!pending_min_tags_.contains(tag)){
+                TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ false);
+                tags_[tag].reset(tag_entry);
+            }
         }
     } else {
         UNREACHABLE();
@@ -228,66 +212,47 @@ IndexQueryResult::State PerSpaceTagCache::FindPrev(uint64_t query_seqnum, uint64
     }
     uint16_t view_id = log_utils::GetViewId(query_seqnum);
     TagEntry tag_entry = *tags_.at(user_tag).get();
-    // check before min seqnum
-    if (tag_entry.seqnum_min_ != kInvalidLogSeqNum){
-        if (query_seqnum < tag_entry.seqnum_min_) {
-            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): seqnum lower min -> invalid", user_tag, bits::HexStr0x(query_seqnum));
+    // check after|at tail
+    TagSuffixGetTail(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id);
+    HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Tail at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
+    if (*seqnum <= query_seqnum) {
+        HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is at tail or after -> found", user_tag, bits::HexStr0x(query_seqnum));
+        tag_entry.popularity_ = popularity;
+        return IndexQueryResult::kFound;
+    }
+    // check before|at suffix head or at min seqnum
+    TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id);
+    HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Head at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
+    if (query_seqnum == *seqnum) {
+        HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum lies on head -> found", user_tag, bits::HexStr0x(query_seqnum));
+        tag_entry.popularity_ = popularity;
+        return IndexQueryResult::kFound;
+    }
+    else if (query_seqnum < *seqnum) {
+        if (tag_entry.complete_) {
+            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is before min seqnum -> invalid", user_tag, bits::HexStr0x(query_seqnum));
             return IndexQueryResult::kInvalid;
-        } else if (query_seqnum == tag_entry.seqnum_min_) {
+        }
+        else if (tag_entry.seqnum_min_ != kInvalidLogSeqNum && tag_entry.seqnum_min_ == query_seqnum) {
             *seqnum = tag_entry.seqnum_min_;
             *storage_shard_id = tag_entry.shard_id_min_;
-            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): seqnum equal min -> found", user_tag, bits::HexStr0x(query_seqnum));
+            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): seqnum lies on min seqnum -> found", user_tag, bits::HexStr0x(query_seqnum));
             tag_entry.popularity_ = popularity;
             return IndexQueryResult::kFound;
+        } else {
+            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is in gap -> empty", user_tag, bits::HexStr0x(query_seqnum));
+            return IndexQueryResult::kEmpty;
         }
     }
-    // check before suffix head
-    if (TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
-        HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Head at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
-        if (query_seqnum == *seqnum) {
-            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum lies on head -> found", user_tag, bits::HexStr0x(query_seqnum));
-            tag_entry.popularity_ = popularity;
-            return IndexQueryResult::kFound;
-        }
-        else if (query_seqnum < *seqnum) {
-            if (tag_entry.complete_) {
-                *seqnum = tag_entry.seqnum_min_;
-                *storage_shard_id = tag_entry.shard_id_min_;
-                HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): seqnum between min seqnum and suffix for complete tag -> found", user_tag, bits::HexStr0x(query_seqnum));
-                tag_entry.popularity_ = popularity;
-                return IndexQueryResult::kFound;
-            } else {
-                HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
-                return IndexQueryResult::kEmpty;
-            }
-        }
-    } else {
-        // if head is empty all is empty
-        HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): No head exists, all empty -> empty", user_tag, bits::HexStr0x(query_seqnum));
-        return IndexQueryResult::kEmpty;
-    }
-    // check after tail
-    if (TagSuffixGetTail(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
-        HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Tail at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
-        if (*seqnum <= query_seqnum) {
-            HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Query seqnum is at tail or after -> found", user_tag, bits::HexStr0x(query_seqnum));
-            tag_entry.popularity_ = popularity;
-            return IndexQueryResult::kFound;
-        }
-    }
-    // invariant: seqnum lies between suffix head and suffix tail
+    // invariant: seqnum lies within suffix head and suffix tail
     uint32_t id;
     uint16_t upper_view_id;
     TagSuffixLink* tag_suffix_link_upper = nullptr;
     auto it = std::make_reverse_iterator(tag_entry.tag_suffix_.lower_bound(view_id));
-    // get lower
-    while (it != tag_entry.tag_suffix_.rbegin()){
-        if(!it->second.empty()){
-            upper_view_id = it->first;
-            tag_suffix_link_upper = &it->second;
-            ++it;
-            break;
-        }
+    // get upper
+    if (it != tag_entry.tag_suffix_.rbegin()){
+        upper_view_id = it->first;
+        tag_suffix_link_upper = &it->second;
         ++it;
     }
     if (tag_suffix_link_upper == nullptr){
@@ -307,14 +272,8 @@ IndexQueryResult::State PerSpaceTagCache::FindPrev(uint64_t query_seqnum, uint64
     uint16_t lower_view_id;
     TagSuffixLink* tag_suffix_link_lower = nullptr;
     // get lower
-    while (it != tag_entry.tag_suffix_.rbegin()){
-        if(!it->second.empty()){
-            lower_view_id = it->first;
-            tag_suffix_link_lower = &it->second;
-            break;
-        }
-        ++it;
-    }
+    lower_view_id = it->first;
+    tag_suffix_link_lower = &it->second;
     if (tag_suffix_link_lower == nullptr) {
         UNREACHABLE();
         return IndexQueryResult::kEmpty;
@@ -335,67 +294,55 @@ IndexQueryResult::State PerSpaceTagCache::FindNext(uint64_t query_seqnum, uint64
     }
     uint16_t view_id = log_utils::GetViewId(query_seqnum);
     TagEntry tag_entry = *tags_.at(user_tag).get();
-    // check before min seqnum
-    if (tag_entry.seqnum_min_ != kInvalidLogSeqNum && query_seqnum <= tag_entry.seqnum_min_){
-        *seqnum = tag_entry.seqnum_min_;
-        *storage_shard_id = tag_entry.shard_id_min_;
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): seqnum equal|lower than min -> found", user_tag, bits::HexStr0x(query_seqnum));
+    // check before|at suffix head or before|at min seqnum
+    TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id);
+    HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Head at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
+    if (query_seqnum + 1 < *seqnum) {
+        if (tag_entry.complete_){
+            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies between min seqnum and head for complete tag -> found", user_tag, bits::HexStr0x(query_seqnum));
+            tag_entry.popularity_ = popularity;
+            return IndexQueryResult::kFound;
+        } else if (tag_entry.seqnum_min_ != kInvalidLogSeqNum && query_seqnum <= tag_entry.seqnum_min_) {
+            *seqnum = tag_entry.seqnum_min_;
+            *storage_shard_id = tag_entry.shard_id_min_;
+            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): seqnum equal|lower than min -> found", user_tag, bits::HexStr0x(query_seqnum));
+            tag_entry.popularity_ = popularity;
+            return IndexQueryResult::kFound;
+        }
+        else {
+            //gap
+            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
+            return IndexQueryResult::kEmpty;
+        }
+    } else if (query_seqnum == *seqnum) {
+        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum is in gap -> found", user_tag, bits::HexStr0x(query_seqnum));
         tag_entry.popularity_ = popularity;
         return IndexQueryResult::kFound;
     }
-    // check between min seqnum and suffix: gap if incomplete
-    if (TagSuffixGetHead(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Head at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
-        if (query_seqnum + 1 < *seqnum) {
-            if (tag_entry.complete_){
-                HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies between min seqnum and head for complete tag -> found", user_tag, bits::HexStr0x(query_seqnum));
-                tag_entry.popularity_ = popularity;
-                return IndexQueryResult::kFound;
-            } else {
-                //gap
-                HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies before head -> empty", user_tag, bits::HexStr0x(query_seqnum));
-                return IndexQueryResult::kEmpty;
-            }
-        } else if (query_seqnum == *seqnum) {
-            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum lies on head -> found", user_tag, bits::HexStr0x(query_seqnum));
-            tag_entry.popularity_ = popularity;
-            return IndexQueryResult::kFound;
-        }
-    } else {
-        // if head is empty all is empty
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Head empty, all empty -> empty", user_tag, bits::HexStr0x(query_seqnum));
-        return IndexQueryResult::kEmpty;
-    }
     // check after tail
-    if (TagSuffixGetTail(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id)){
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Tail at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
-        if (*seqnum == query_seqnum) {
-            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Query seqnum is at tail -> found", user_tag, bits::HexStr0x(query_seqnum));
-            tag_entry.popularity_ = popularity;
-            return IndexQueryResult::kFound;
-        }
-        if (*seqnum < query_seqnum) {
-            HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Query seqnum is after tail -> invalid", user_tag, bits::HexStr0x(query_seqnum));
-            return IndexQueryResult::kInvalid;
-        }
+    TagSuffixGetTail(tag_entry.tag_suffix_, space_id, seqnum, storage_shard_id);
+    HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Tail at {}", user_tag, bits::HexStr0x(query_seqnum), bits::HexStr0x(*seqnum));
+    if (*seqnum == query_seqnum) {
+        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Query seqnum is at tail -> found", user_tag, bits::HexStr0x(query_seqnum));
+        tag_entry.popularity_ = popularity;
+        return IndexQueryResult::kFound;
     }
-    // invariant: seqnum lies after min seqnum and global tail
+    if (*seqnum < query_seqnum) {
+        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Query seqnum is after tail -> invalid", user_tag, bits::HexStr0x(query_seqnum));
+        return IndexQueryResult::kInvalid;
+    }
+    // invariant: seqnum lies within suffix head and suffix tail
     uint32_t identifier;
     TagSuffixLink* tag_suffix_link = nullptr;
     auto it = tag_entry.tag_suffix_.lower_bound(view_id);
     // get lower
-    while (it != tag_entry.tag_suffix_.end()){
-        if (!it->second.empty()){
-            view_id = it->first;
-            tag_suffix_link = &it->second;
-            ++it;
-            break;
-        }
+    if (it != tag_entry.tag_suffix_.end()){
+        view_id = it->first;
+        tag_suffix_link = &it->second;
         ++it;
     }
     if (tag_suffix_link == nullptr){
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): No seqnum entry for view equal|higher {} -> invalid", user_tag, bits::HexStr0x(query_seqnum), view_id);
-        return IndexQueryResult::kInvalid;
+        UNREACHABLE();
     }
     identifier = bits::JoinTwo16(view_id, space_id);
     if(TagSuffixLinkFindNext(*tag_suffix_link, identifier, query_seqnum, seqnum, storage_shard_id)){
@@ -405,18 +352,12 @@ IndexQueryResult::State PerSpaceTagCache::FindNext(uint64_t query_seqnum, uint64
     }
     // get upper
     tag_suffix_link = nullptr;
-    while (it != tag_entry.tag_suffix_.end()){
-        if (!it->second.empty()){
-            view_id = it->first;
-            tag_suffix_link = &it->second;
-            break;
-        }
-        ++it;
+    if (it != tag_entry.tag_suffix_.end()){
+        view_id = it->first;
+        tag_suffix_link = &it->second;
     }
     if(tag_suffix_link == nullptr) {
-        // create invalid result because seqnum lies in the future
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Query seqnum in future -> invalid", user_tag, bits::HexStr0x(query_seqnum), view_id);
-        return IndexQueryResult::kInvalid;
+        UNREACHABLE();
     }
     // get head of next suffix entry
     identifier = bits::JoinTwo16(view_id, space_id);
@@ -659,9 +600,10 @@ void TagCache::PollQueryResults(QueryResultVec* results) {
 }
 
 void TagCache::ProcessQuery(const IndexQuery& query){
+    uint64_t progress = index_metalog_progress();
     if (!per_space_cache_.contains(query.user_logspace)){
         LOG(WARNING) << "Unknown logspace";
-        pending_query_results_.push_back(BuildNotFoundResult(query));
+        pending_query_results_.push_back(BuildNotFoundResult(query, progress));
         return;
     }
     PerSpaceTagCache* cache = GetOrCreatePerSpaceTagCache(query.user_logspace);
@@ -673,7 +615,7 @@ void TagCache::ProcessQuery(const IndexQuery& query){
             query.query_seqnum,
             query.user_tag,
             sequencer_id_,
-            index_metalog_progress(),
+            progress,
             &seqnum,
             &storage_shard_id
         );
@@ -682,7 +624,7 @@ void TagCache::ProcessQuery(const IndexQuery& query){
             query.query_seqnum,
             query.user_tag,
             sequencer_id_,
-            index_metalog_progress(),
+            progress,
             &seqnum,
             &storage_shard_id
         );
@@ -693,13 +635,13 @@ void TagCache::ProcessQuery(const IndexQuery& query){
     switch(state){
         case IndexQueryResult::kFound:
             //Clear();
-            pending_query_results_.push_back(BuildFoundResult(query, latest_view_id_, seqnum, storage_shard_id));
+            pending_query_results_.push_back(BuildFoundResult(query, progress, latest_view_id_, seqnum, storage_shard_id));
             return;
         case IndexQueryResult::kEmpty:
-            pending_query_results_.push_back(BuildNotFoundResult(query));
+            pending_query_results_.push_back(BuildNotFoundResult(query, progress));
             return;
         case IndexQueryResult::kInvalid:
-            pending_query_results_.push_back(BuildInvalidResult(query));
+            pending_query_results_.push_back(BuildInvalidResult(query, progress));
             return;
         case IndexQueryResult::kContinue:
             LOG(FATAL) << "No need for kContinue";
@@ -707,12 +649,11 @@ void TagCache::ProcessQuery(const IndexQuery& query){
     }
 }
 
-IndexQueryResult TagCache::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
+IndexQueryResult TagCache::BuildFoundResult(const IndexQuery& query, uint64_t metalog_progress, uint16_t view_id,
                                          uint64_t seqnum, uint16_t storage_shard_id) {
     return IndexQueryResult {
         .state = IndexQueryResult::kFound,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
+        .metalog_progress = metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {
@@ -723,11 +664,10 @@ IndexQueryResult TagCache::BuildFoundResult(const IndexQuery& query, uint16_t vi
     };
 }
 
-IndexQueryResult TagCache::BuildNotFoundResult(const IndexQuery& query) {
+IndexQueryResult TagCache::BuildNotFoundResult(const IndexQuery& query, uint64_t metalog_progress) {
     return IndexQueryResult {
         .state = IndexQueryResult::kEmpty,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
+        .metalog_progress = metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {
@@ -738,11 +678,10 @@ IndexQueryResult TagCache::BuildNotFoundResult(const IndexQuery& query) {
     };
 }
 
-IndexQueryResult TagCache::BuildInvalidResult(const IndexQuery& query) {
+IndexQueryResult TagCache::BuildInvalidResult(const IndexQuery& query, uint64_t metalog_progress) {
     return IndexQueryResult {
         .state = IndexQueryResult::kInvalid,
-        .metalog_progress = query.initial ? index_metalog_progress()
-                                          : query.metalog_progress,
+        .metalog_progress = metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {
