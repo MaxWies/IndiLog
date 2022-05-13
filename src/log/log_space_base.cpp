@@ -115,6 +115,10 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             iter = pending_metalogs_.erase(iter);
             continue;
         }
+        if (iter->first > metalog_position_){
+            HLOG_F(WARNING, "I must wait for metalog position {}. Pending metalog position {} higher", bits::HexStr0x(metalog_position_), bits::HexStr0x(iter->first));
+            break;
+        }
         MetaLogProto* meta_log = iter->second;
         if (!first_metalog_){ //hack for local indexes
             if (!CanApplyMetaLog(*meta_log)){

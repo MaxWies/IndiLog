@@ -128,12 +128,10 @@ public:
 
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {
             size_t first_shard = PickIndexShard(); // node of shard is master
-            LOG_F(INFO, "Master shard is {} of {} shards", first_shard, view_->num_index_shards_);
             for (size_t i = first_shard; i < view_->num_index_shards_ + first_shard ; i++) {
                 size_t j = i % view_->num_index_shards_;
                 DCHECK_LE(j, static_cast<size_t>(view_->num_index_shards_ - 1));
                 uint16_t index_node = PickIndexNode(j);
-                LOG_F(INFO, "Pick index node {} of shard {}", index_node, j);
                 sharded_index_nodes.push_back(index_node);
             } 
         }

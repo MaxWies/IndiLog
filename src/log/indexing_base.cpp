@@ -64,7 +64,6 @@ void IndexBase::SetupTimers() {
 void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
                                         const SharedLogMessage& message,
                                         std::span<const char> payload) {
-    HVLOG(1) << "Receive SharedLogMessage";
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     DCHECK(
         (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
@@ -88,17 +87,14 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::READ_NEXT:
     case SharedLogOpType::READ_PREV:
     case SharedLogOpType::READ_NEXT_B:
-        HVLOG(1) << "Handle read request";
         HandleReadRequest(message);
         break;
     case SharedLogOpType::INDEX_DATA:
-        HVLOG(1) << "Handle new index data";
         OnRecvNewIndexData(message, payload);
         break;
     case SharedLogOpType::READ_NEXT_INDEX_RESULT:
     case SharedLogOpType::READ_PREV_INDEX_RESULT:
     case SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
-        HVLOG(1) << "Handle slave result";
         HandleSlaveResult(message, payload);
         break;
     case SharedLogOpType::READ_MIN:

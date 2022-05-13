@@ -416,6 +416,7 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
 
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
     index_data_.add_metalog_positions(metalog_position_);
+    index_data_.add_next_seqnum_positions(local_seqnum_position());
     index_data_.add_num_active_storage_shards(gsl::narrow_cast<uint32_t>(active_storage_shard_ids().size()));
     for(uint16_t active_storage_shard_id : active_storage_shard_ids()){
         if(interested_shards_.contains(active_storage_shard_id)){

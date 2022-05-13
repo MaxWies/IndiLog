@@ -182,11 +182,11 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
     }
     // check if seqnum lies at head, left next to it or before
     if (GetHead(&seqnum, &storage_shard_id)){
-        if (query.query_seqnum == seqnum || query.query_seqnum + 1 == seqnum){
+        if (query.query_seqnum == seqnum){
             HVLOG(1) << "SuffixRead: Seqnum lies on head -> Found";
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
-        if (0 < seqnum && query.query_seqnum + 1 < seqnum) {
+        else if (query.query_seqnum < seqnum) {
             HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
             return BuildNotFoundResult(query);
         }
@@ -197,7 +197,7 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
             HVLOG(1) << "SuffixRead: Seqnum lies at tail -> Valid";
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
-        if (seqnum < query.query_seqnum) {
+        else if (seqnum < query.query_seqnum) {
             HVLOG(1) << "SuffixRead: Seqnum lies behind tail -> Invalid";
             return BuildInvalidResult(query);
         }
@@ -264,7 +264,7 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
             HVLOG(1) << "SuffixRead: Seqnum lies on head -> Found";
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
-        if (0 < seqnum && query.query_seqnum < seqnum) {
+        else if (query.query_seqnum < seqnum) {
             HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
             return BuildNotFoundResult(query);
         }

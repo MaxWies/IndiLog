@@ -124,18 +124,19 @@ message LogEntryProto {
 message IndexDataProto {
     uint32 logspace_id  = 1;
 
-    repeated uint32 metalog_positions = 2;
-    repeated uint32 num_active_storage_shards = 3; //todo
-    repeated uint32 my_active_storage_shards = 4;
+    uint32 index_shard = 2;
 
-    repeated uint32 user_logspaces = 5; //is always sent
+    repeated uint32 metalog_positions = 3;
+    repeated uint32 num_active_storage_shards = 4;
+    repeated uint32 my_active_storage_shards = 5;
+    repeated uint32 next_seqnum_positions = 6;
 
-    uint32 index_shard = 6;
+    repeated uint32 user_logspaces = 7;
 
-    repeated uint32 seqnum_halves  = 7;
-    repeated uint32 engine_ids     = 8;
-    repeated uint32 user_tag_sizes = 9;
-    repeated uint64 user_tags      = 10;
+    repeated uint32 seqnum_halves  = 8;
+    repeated uint32 engine_ids     = 9;
+    repeated uint32 user_tag_sizes = 10;
+    repeated uint64 user_tags      = 11;
 }
 
 message IndexResultProto {

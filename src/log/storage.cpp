@@ -207,7 +207,7 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
             index_data = locked_storage->PollIndexData();
             view->GetStorageNode(my_node_id());
             if (index_data.has_value()) {
-                    index_data->set_index_shard(view->GetStorageNode(my_node_id())->PickIndexShard());
+                index_data->set_index_shard(view->GetStorageNode(my_node_id())->PickIndexShard());
             }
         }
     }

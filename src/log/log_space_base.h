@@ -18,6 +18,7 @@ public:
     uint32_t identifier() const { return bits::JoinTwo16(view_id(), sequencer_id()); }
 
     uint32_t metalog_position() const { return metalog_position_; }
+    uint32_t local_seqnum_position() const { return seqnum_position_; }
     uint64_t seqnum_position() const {
         return bits::JoinTwo32(identifier(), seqnum_position_);
     }
