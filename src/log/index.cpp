@@ -49,9 +49,33 @@ protocol::SharedLogOpType IndexQuery::DirectionToIndexResult() const {
     }
 }
 
+std::string IndexQuery::DirectionToString() const {
+    switch (direction) {
+    case IndexQuery::kReadNext:
+        return "next";
+    case IndexQuery::kReadPrev:
+        return "prev";
+    case IndexQuery::kReadNextB:
+        return "nextB";
+    default:
+        UNREACHABLE();
+    }
+}
+
 uint32_t IndexQueryResult::StorageShardId() const {
     CHECK_EQ(state, State::kFound);
     return bits::JoinTwo16(bits::LowHalf32(bits::HighHalf64(found_result.seqnum)), found_result.storage_shard_id);
+}
+
+bool IndexQueryResult::IsFound() const {
+    return state == State::kFound;
+}
+
+bool IndexQueryResult::IsPointHit() const {
+    if (state != State::kFound){
+        return false;
+    }
+    return original_query.query_seqnum == found_result.seqnum;
 }
 
 Index::Index(const View* view, uint16_t sequencer_id)

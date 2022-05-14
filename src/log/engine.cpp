@@ -624,12 +624,14 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         uint64_t op_id = message.client_data;
         LocalOp* op;
         if (!onging_reads_.Poll(op_id, &op)) {
-            HLOG_F(WARNING, "Cannot find read op with id {}", op_id);
+            HLOG_F(WARNING, "Cannot find read op with id {}. result_type={}, origin_node_id={}", 
+                op_id, uint16_t(result), message.origin_node_id
+            );
             return;
         }
         if (result == SharedLogResultType::READ_OK) {
             uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
-            HVLOG_F(1, "Receive remote read response for log (seqnum {})", bits::HexStr0x(seqnum));
+            HVLOG_F(1, "Receive remote read response for log (seqnum {})", seqnum);
             std::span<const uint64_t> user_tags;
             std::span<const char> log_data;
             std::span<const char> aux_data;
@@ -648,12 +650,12 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             }
         } else if (result == SharedLogResultType::EMPTY) {
             HLOG_F(INFO, "Receive EMPTY response for read request: seqnum={}, tag={}",
-                   bits::HexStr0x(op->seqnum), op->query_tag);
+                   op->seqnum, op->query_tag);
             FinishLocalOpWithFailure(
                 op, SharedLogResultType::EMPTY, message.user_metalog_progress);
         } else if (result == SharedLogResultType::DATA_LOST) {
             HLOG_F(WARNING, "Receive DATA_LOST response for read request: seqnum={}, tag={}",
-                   bits::HexStr0x(op->seqnum), op->query_tag);
+                   op->seqnum, op->query_tag);
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         } else {
             UNREACHABLE();

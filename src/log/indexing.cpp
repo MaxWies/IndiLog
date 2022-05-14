@@ -148,8 +148,8 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     }
     if (index_ptr != nullptr) {
         IndexQuery query = BuildIndexQuery(request, request.origin_node_id);
-        HVLOG_F(1, "IndexRead: Make query. Metalog {}, logspace={}, tag={}, query_seqnum={}", 
-            bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, query.query_seqnum
+        HVLOG_F(1, "IndexRead: Make query. client_id={}, metalog={}, logspace={}, tag={}, query_seqnum={}", 
+            request.client_data, bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, query.query_seqnum
         );
         Index::QueryResultVec query_results;
         {
@@ -367,25 +367,18 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
     }
     IndexQueryResult slave_index_query_result = BuildIndexResult(message, index_result_proto);
     IndexQueryResult merged_index_query_result;
-    if(MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result)){
-        if (merged_index_query_result.state == IndexQueryResult::kFound){
-            HVLOG(1) << "IndexRead: Index result found in index tier. Forward read request";
-            ForwardReadRequest(merged_index_query_result);
-        } else {
-            auto read_direction = "";
-            if(merged_index_query_result.original_query.direction == IndexQuery::ReadDirection::kReadPrev){
-                read_direction = "prev";
-            } else {
-                read_direction = "next";
-            }
-            HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, seqnum={}",
-                read_direction, 
-                merged_index_query_result.original_query.user_logspace, 
-                merged_index_query_result.original_query.user_tag, 
-                merged_index_query_result.original_query.query_seqnum
-            );
-            SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
-        }
+    bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
+    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
+        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", merged_index_query_result.original_query.query_seqnum);
+        ForwardReadRequest(merged_index_query_result);
+    } else if (merge_complete && !merged_index_query_result.IsFound()){
+        HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
+            merged_index_query_result.original_query.DirectionToString(), 
+            merged_index_query_result.original_query.user_logspace, 
+            merged_index_query_result.original_query.user_tag, 
+            merged_index_query_result.original_query.query_seqnum
+        );
+        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
     }
 }
 
@@ -394,8 +387,33 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
 #undef IGNORE_IF_FROM_PAST_VIEW
 #undef RETURN_IF_LOGSPACE_FINALIZED
 
-void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
-    DCHECK(query_result.state == IndexQueryResult::kFound || query_result.state == IndexQueryResult::kEmpty);
+void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
+    if (my_query_result.IsPointHit()){
+        HVLOG_F(1, "IndexRead: Point hit. Forward read request for query_seqnum={}", my_query_result.original_query.query_seqnum);
+        ForwardReadRequest(my_query_result);
+    }
+    if (IsSlave(my_query_result.original_query)){
+        HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), my_query_result.original_query.master_node_id);
+        SendMasterIndexResult(my_query_result);
+        return;
+    }
+    IndexQueryResult merged_index_query_result;
+    bool merge_complete = MergeIndexResult(my_node_id(), my_query_result, &merged_index_query_result);
+    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()) {
+        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", merged_index_query_result.original_query.query_seqnum);
+        ForwardReadRequest(merged_index_query_result);
+    } else if (merge_complete && !merged_index_query_result.IsFound()){
+        HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
+            merged_index_query_result.original_query.DirectionToString(), 
+            merged_index_query_result.original_query.user_logspace, 
+            merged_index_query_result.original_query.user_tag, 
+            merged_index_query_result.original_query.query_seqnum
+        );
+        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+    }
+}
+
+void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
     if (query_result.original_query.min_seqnum_query){
         if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
             // broadcast new tag
@@ -424,25 +442,6 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& query_result) {
             SendIndexReadResponse(query_result, logspace_id);
         }
         return;
-    }
-    if (IsSlave(query_result.original_query)){
-        HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), query_result.original_query.master_node_id);
-        SendMasterIndexResult(query_result);
-        return;
-    }
-    IndexQueryResult merged_index_query_result;
-    if(MergeIndexResult(my_node_id(), query_result, &merged_index_query_result)){
-        if (merged_index_query_result.state == IndexQueryResult::kFound){
-            HVLOG(1) << "IndexRead: Index result found in index tier. Forward read request";
-            ForwardReadRequest(merged_index_query_result);
-        } else {
-            HLOG_F(INFO, "IndexRead: No shard was able to find a result for logspace={}, tag={}, seqnum={}", 
-                query_result.original_query.user_logspace, 
-                query_result.original_query.user_tag, 
-                query_result.original_query.query_seqnum
-            );
-            SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
-        }
     }
 }
 
@@ -513,15 +512,10 @@ void IndexNode::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
     for (const IndexQueryResult& result : results) {
         switch (result.state) {
         case IndexQueryResult::kEmpty:
-            HVLOG(1) << "IndexRead: Process Empty result";
-            ProcessIndexResult(result);
-            break;
         case IndexQueryResult::kFound:
-            HVLOG(1) << "IndexRead: Process Found result";
-            ProcessIndexResult(result);
+            result.original_query.min_seqnum_query ? ProcessIndexMinResult(result) : ProcessIndexResult(result);
             break;
         case IndexQueryResult::kContinue:
-            HVLOG(1) << "IndexRead: Process Continue result";
             ProcessIndexContinueResult(result, &more_results);
             break;
         default:

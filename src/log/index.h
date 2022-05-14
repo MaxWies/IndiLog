@@ -35,6 +35,7 @@ struct IndexQuery {
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);
     protocol::SharedLogOpType DirectionToOpType() const;
     protocol::SharedLogOpType DirectionToIndexResult() const;
+    std::string DirectionToString() const;
 };
 
 struct IndexQueryResult {
@@ -47,6 +48,8 @@ struct IndexQueryResult {
     IndexFoundResult found_result;
 
     uint32_t StorageShardId() const;
+    bool IsFound() const;
+    bool IsPointHit() const;
 };
 
 class Index final : public LogSpaceBase {
