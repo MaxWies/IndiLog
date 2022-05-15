@@ -11,6 +11,7 @@ LogSpaceBase::LogSpaceBase(Mode mode, const View* view, uint16_t sequencer_id)
       view_(view),
       sequencer_node_(view->GetSequencerNode(sequencer_id)),
       metalog_position_(0),
+      old_metalog_position_(0),
       log_header_(fmt::format("LogSpace[{}-{}]: ", view->id(), sequencer_id)),
       seqnum_position_(0),
       first_metalog_(true) {
@@ -115,11 +116,13 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             iter = pending_metalogs_.erase(iter);
             continue;
         }
-        if (iter->first > metalog_position_){
-            HLOG_F(WARNING, "I must wait for metalog position {}. Pending metalog position {} higher", bits::HexStr0x(metalog_position_), bits::HexStr0x(iter->first));
+        MetaLogProto* meta_log = iter->second;
+        if (iter->first > metalog_position_ && meta_log->metalog_seqnum_last_storage_shard_change() >= metalog_position_){
+            HLOG_F(WARNING, "I must wait for metalog position {}. Pending metalog position {} higher and storage shard change happend", 
+                bits::HexStr0x(metalog_position_), bits::HexStr0x(iter->first)
+            );
             break;
         }
-        MetaLogProto* meta_log = iter->second;
         if (!first_metalog_){ //hack for local indexes
             if (!CanApplyMetaLog(*meta_log)){
                 break;
@@ -142,6 +145,7 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             UNREACHABLE();
         }
         HVLOG(1) << "MetalogUpdate: Increase metalog_position by 1";
+        old_metalog_position_ = metalog_position_;
         metalog_position_ = meta_log->metalog_seqnum() + 1;
         OnMetaLogApplied(*meta_log);
         iter = pending_metalogs_.erase(iter);

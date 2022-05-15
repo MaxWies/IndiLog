@@ -377,37 +377,42 @@ TagCacheView::TagCacheView(uint16_t view_id)
 TagCacheView::~TagCacheView() {}
 
 bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
-    auto storage_shards = index_data.my_active_storage_shards();
     bool index_data_new = false;
-    for(int i = 0; i < index_data.metalog_positions_size(); i++){
-        uint32_t metalog_position = index_data.metalog_positions().at(i);
-        size_t active_shards = index_data.num_active_storage_shards().at(i);
-        if (metalog_position <= metalog_position_){
+    for(int i = 0; i < index_data.meta_headers_size(); i++){
+        auto meta_header = index_data.meta_headers().at(i);
+        if (meta_header.metalog_position() <= metalog_position_){
             continue;
         }
-        if(storage_shards_index_updates_.contains(metalog_position)){
-            size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
-            size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            DCHECK_GE(after_update, before_update);
-            index_data_new = after_update > before_update; //check if some of the shards contributed
-        } else {
-            HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
-            storage_shards_index_updates_.insert({
-                metalog_position,
-                {
-                    active_shards, // store the active shards for this metalog
-                    absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
-                }
-            });
-            DCHECK(0 < storage_shards_index_updates_.size());
-            index_data_new = true;
+        auto storage_shards = meta_header.my_active_storage_shards();
+        size_t active_shards = meta_header.num_active_storage_shards();
+        for (uint32_t metalog_position = meta_header.old_metalog_position() + 1; metalog_position <= meta_header.metalog_position(); metalog_position++) {
+            if(storage_shards_index_updates_.contains(metalog_position)){
+                size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
+                storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
+                size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
+                DCHECK_GE(after_update, before_update);
+                end_seqnum_positions_[metalog_position] = 
+                    std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
+                index_data_new = after_update > before_update; //check if some of the shards contributed
+            } else {
+                HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
+                storage_shards_index_updates_.insert({
+                    metalog_position,
+                    {
+                        active_shards, // store the active shards for this metalog
+                        absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
+                    }
+                });
+                DCHECK(0 < storage_shards_index_updates_.size());
+                end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
+                index_data_new = true;
+            }
         }
     }
     return index_data_new;
 }
 
-bool TagCacheView::TryCompleteIndexUpdates(){
+bool TagCacheView::TryCompleteIndexUpdates(uint32_t* next_seqnum_position){
     // check if next higher metalog_position is complete
     uint32_t next_metalog_position = metalog_position_ + 1;
     if (!storage_shards_index_updates_.contains(next_metalog_position)){
@@ -422,7 +427,9 @@ bool TagCacheView::TryCompleteIndexUpdates(){
     if (entry.first == entry.second.size()){
         // updates from all active storage shards received
         metalog_position_ = next_metalog_position;
+        *next_seqnum_position = end_seqnum_positions_.at(next_metalog_position);
         storage_shards_index_updates_.erase(next_metalog_position);
+        end_seqnum_positions_.erase(next_metalog_position);
         HVLOG_F(1, "Shards for metalog position {} completed", next_metalog_position);
         return true;
     }
@@ -446,7 +453,6 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
         return;
     }
     HVLOG(1) << "Receive new index data";
-    uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
     int n = index_data.seqnum_halves_size();
     DCHECK_EQ(n, index_data.engine_ids_size());
     DCHECK_EQ(n, index_data.user_logspaces_size());
@@ -456,24 +462,20 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
     auto tag_iter = index_data.user_tags().begin();
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
+        if (num_tags < 1){
+            // cache stores only seqnum with tags
+            continue;
+        }
         uint32_t seqnum = index_data.seqnum_halves(i);
         for(size_t j = 0; j < num_tags; j++){
-            uint32_t user_logspace = index_data.user_logspaces(i);
-            GetOrCreatePerSpaceTagCache(user_logspace)->AddOrUpdate(
-                *tag_iter, 
-                view_id,
-                sequencer_id_,
-                seqnum, 
-                gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
-                popularity
-            );
-            tags_list_.push_front({user_logspace, *tag_iter, popularity});            
+            received_data_[seqnum] = IndexData {
+                .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
+                .user_logspace = index_data.user_logspaces(i),
+                .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
+            };
         }
         tag_iter += num_tags;
     }
-    //todo
-    //Clear();
-    // todo: blocking reads
     AdvanceIndexProgress(view_id);
 }
 
@@ -516,7 +518,31 @@ void TagCache::InstallView(uint16_t view_id){
 
 bool TagCache::AdvanceIndexProgress(uint16_t view_id){
     bool advanced = false;
-    while (views_.at(view_id)->TryCompleteIndexUpdates()){
+    uint32_t end_seqnum_position;
+    while (views_.at(view_id)->TryCompleteIndexUpdates(&end_seqnum_position)){
+        uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
+        {
+            auto iter = received_data_.begin();
+            while (iter != received_data_.end()) {
+                uint32_t seqnum = iter->first;
+                if (end_seqnum_position <= seqnum){
+                    break;
+                }
+                const IndexData& index_data = iter->second;
+                for (uint64_t tag : index_data.user_tags) {
+                    GetOrCreatePerSpaceTagCache(index_data.user_logspace)->AddOrUpdate(
+                        tag, 
+                        view_id,
+                        sequencer_id_,
+                        seqnum, 
+                        index_data.engine_id,
+                        popularity
+                    );
+                    tags_list_.push_front({index_data.user_logspace, tag, popularity});
+                }
+                iter = received_data_.erase(iter);
+            }
+        }
         advanced = true;
         HVLOG_F(1, "Advanced metalog to {}", views_.at(view_id)->metalog_position());
     }
@@ -531,6 +557,8 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
             iter = pending_queries_.erase(iter);
         }
     }
+    //todo
+    //Clear();
     return advanced;
 }
 

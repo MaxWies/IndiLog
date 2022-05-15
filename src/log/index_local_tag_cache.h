@@ -60,7 +60,7 @@ public:
     ~TagCacheView();
 
     bool CheckIfNewIndexData(const IndexDataProto& index_data);
-    bool TryCompleteIndexUpdates();
+    bool TryCompleteIndexUpdates(uint32_t* end_seqnum_position);
     uint32_t metalog_position(){
         return metalog_position_;
     }
@@ -70,6 +70,7 @@ private:
     std::string log_header_;
     uint32_t metalog_position_;
     absl::flat_hash_map<uint32_t /* metalog_position */, std::pair<size_t, absl::flat_hash_set<uint16_t>>> storage_shards_index_updates_;
+    absl::flat_hash_map<uint32_t /* metalog_position */, uint32_t> end_seqnum_positions_;
 };
 
 class TagCache {
@@ -103,8 +104,12 @@ private:
 
     std::string log_header_;
 
-    // uint32_t seqnum_position_;
-    // uint32_t metalog_position_;
+    struct IndexData {
+        uint16_t   engine_id;
+        uint32_t   user_logspace;
+        UserTagVec user_tags;
+    };
+    std::map</* seqnum */ uint32_t, IndexData> received_data_;
 
     std::multimap</* metalog_position */ uint32_t,
                   IndexQuery> pending_queries_;

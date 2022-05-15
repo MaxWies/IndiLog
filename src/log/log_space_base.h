@@ -63,6 +63,7 @@ protected:
     const View* view_;
     const View::Sequencer* sequencer_node_;
     uint32_t metalog_position_;
+    uint32_t old_metalog_position_;
     std::string log_header_;
 
 private:

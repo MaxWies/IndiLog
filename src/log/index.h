@@ -100,7 +100,7 @@ private:
 
     // for index tier
     absl::flat_hash_map<uint32_t /* metalog_position */, std::pair<size_t, absl::flat_hash_set<uint16_t>>> storage_shards_index_updates_;
-    absl::flat_hash_map<uint32_t /* metalog_position */, uint32_t> per_metalog_next_seqnum_position_;
+    absl::flat_hash_map<uint32_t /* metalog_position */, uint32_t> end_seqnum_positions_;
 
     struct IndexData {
         uint16_t   engine_id;

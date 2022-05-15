@@ -461,13 +461,13 @@ bool Index::AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_i
         }
     }
     bool advanced = false;
-    uint32_t next_seqnum_position;
-    while(TryCompleteIndexUpdates(&next_seqnum_position)){
+    uint32_t end_seqnum_position;
+    while(TryCompleteIndexUpdates(&end_seqnum_position)){
         {
             auto iter = received_data_.begin();
             while (iter != received_data_.end()) {
                 uint32_t seqnum = iter->first;
-                if (next_seqnum_position <= seqnum){
+                if (end_seqnum_position <= seqnum){
                     break;
                 }
                 const IndexData& index_data = iter->second;
@@ -510,38 +510,42 @@ bool Index::AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_i
 
 
 bool Index::CheckIfNewIndexData(const IndexDataProto& index_data){
-    auto storage_shards = index_data.my_active_storage_shards();
     bool index_data_new = false;
-    for(int i = 0; i < index_data.metalog_positions_size(); i++){
-        uint32_t metalog_position = index_data.metalog_positions().at(i);
-        size_t active_shards = index_data.num_active_storage_shards().at(i);
-        if (metalog_position <= metalog_position_){
+    for(int i = 0; i < index_data.meta_headers_size(); i++){
+        auto meta_header = index_data.meta_headers().at(i);
+        if (meta_header.metalog_position() <= metalog_position_){
             continue;
         }
-        if(storage_shards_index_updates_.contains(metalog_position)){
-            size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
-            size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            DCHECK_GE(after_update, before_update);
-            index_data_new = after_update > before_update; //check if some of the shards contributed
-        } else {
-            HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
-            storage_shards_index_updates_.insert({
-                metalog_position,
-                {
-                    active_shards, // store the active shards for this metalog
-                    absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
-                }
-            });
-            DCHECK(0 < storage_shards_index_updates_.size());
-            per_metalog_next_seqnum_position_[metalog_position] = index_data.next_seqnum_positions(i);
-            index_data_new = true;
+        auto storage_shards = meta_header.my_active_storage_shards();
+        size_t active_shards = meta_header.num_active_storage_shards();
+        for (uint32_t metalog_position = meta_header.old_metalog_position() + 1; metalog_position <= meta_header.metalog_position(); metalog_position++) {
+            if(storage_shards_index_updates_.contains(metalog_position)){
+                size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
+                storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
+                size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
+                DCHECK_GE(after_update, before_update);
+                end_seqnum_positions_[metalog_position] = 
+                    std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
+                index_data_new = after_update > before_update; //check if some of the shards contributed
+            } else {
+                HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
+                storage_shards_index_updates_.insert({
+                    metalog_position,
+                    {
+                        active_shards, // store the active shards for this metalog
+                        absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
+                    }
+                });
+                DCHECK(0 < storage_shards_index_updates_.size());
+                end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
+                index_data_new = true;
+            }
         }
     }
     return index_data_new;
 }
 
-bool Index::TryCompleteIndexUpdates(uint32_t* next_seqnum_position){
+bool Index::TryCompleteIndexUpdates(uint32_t* end_seqnum_position){
     // check if next higher metalog_position is complete
     uint32_t next_index_metalog_position = indexed_metalog_position_ + 1;
     if (!storage_shards_index_updates_.contains(next_index_metalog_position)){
@@ -556,9 +560,9 @@ bool Index::TryCompleteIndexUpdates(uint32_t* next_seqnum_position){
     if (entry.first == entry.second.size()){
         // updates from all active storage shards received
         indexed_metalog_position_ = next_index_metalog_position;
-        *next_seqnum_position = per_metalog_next_seqnum_position_.at(next_index_metalog_position);
+        *end_seqnum_position = end_seqnum_positions_.at(next_index_metalog_position);
         storage_shards_index_updates_.erase(next_index_metalog_position);
-        per_metalog_next_seqnum_position_.erase(next_index_metalog_position);
+        end_seqnum_positions_.erase(next_index_metalog_position);
         HVLOG_F(1, "Shards for metalog position {} completed", next_index_metalog_position);
         return true;
     }

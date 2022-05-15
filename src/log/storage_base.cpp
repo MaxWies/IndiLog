@@ -152,10 +152,10 @@ std::optional<std::string> StorageBase::LogCacheGetAuxData(uint64_t seqnum) {
 
 void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutable,
                                 const IndexDataProto& index_data_proto) {
-    if (index_data_proto.metalog_positions_size() < 1 && 0 < index_data_proto.seqnum_halves_size()){
+    if (index_data_proto.meta_headers_size() < 1 && 0 < index_data_proto.seqnum_halves_size()){
         HLOG(FATAL) << "Sending metalog without any position but new seqnums";
     }
-    if (index_data_proto.metalog_positions_size() < 1){
+    if (index_data_proto.meta_headers_size() < 1){
         return;
     }
     uint32_t logspace_id = index_data_proto.logspace_id();

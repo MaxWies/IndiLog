@@ -415,12 +415,14 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
 }
 
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
-    index_data_.add_metalog_positions(metalog_position_);
-    index_data_.add_next_seqnum_positions(local_seqnum_position());
-    index_data_.add_num_active_storage_shards(gsl::narrow_cast<uint32_t>(active_storage_shard_ids().size()));
+    auto meta_header = index_data_.add_meta_headers();
+    meta_header->set_metalog_position(metalog_position_);
+    meta_header->set_old_metalog_position(old_metalog_position_);
+    meta_header->set_end_seqnum_position(local_seqnum_position());
+    meta_header->set_num_active_storage_shards(uint32_t(active_storage_shard_ids().size()));
     for(uint16_t active_storage_shard_id : active_storage_shard_ids()){
         if(interested_shards_.contains(active_storage_shard_id)){
-            index_data_.add_my_active_storage_shards(active_storage_shard_id);
+            meta_header->add_my_active_storage_shards(active_storage_shard_id);
         }
     }
 }

@@ -200,8 +200,8 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
         LOG(FATAL) << "IndexUpdate: Failed to parse IndexDataProto";
     }
 
-    if(index_data_proto.metalog_positions_size() < 1){
-        LOG(WARNING) << "IndexUpdate: IndexDataProto without any metalog positions";
+    if(index_data_proto.meta_headers_size() < 1){
+        LOG(WARNING) << "IndexUpdate: IndexDataProto without any metaheaders";
         return;
     }
 
@@ -221,22 +221,9 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
         auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_index = index_ptr.Lock();
-            uint32_t index_data_metalog_position_min = index_data_proto.metalog_positions().at(0);
-            uint32_t index_data_metalog_position_max = index_data_proto.metalog_positions().at(index_data_proto.metalog_positions_size() - 1);
-            HVLOG_F(1, "IndexUpdate: IndexMetalogPosition={}, IndexDataMetalogPositionMin={}, IndexDataMetalogPositionMax={}", 
-                bits::HexStr0x(locked_index->indexed_metalog_position()), 
-                bits::HexStr0x(index_data_metalog_position_min), 
-                bits::HexStr0x(index_data_metalog_position_max)
-            );
-            if(locked_index->indexed_metalog_position() >= index_data_metalog_position_max){
-                LOG(WARNING) << "IndexUpdate: Index update from old metalog";
-                return;
-            }
             if(!locked_index->AdvanceIndexProgress(index_data_proto, my_node_id())){
-                HVLOG(1) << "IndexUpdate: Do not process query results because metalog did not increase";
                 return;
             }
-            HVLOG(1) << "IndexUpdate: Process query results because metalog increased";
             locked_index->PollQueryResults(&query_results);
         }
     }

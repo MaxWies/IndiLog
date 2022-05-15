@@ -64,29 +64,30 @@ message MetaLogProto {
     uint32 logspace_id    = 1;
     uint32 metalog_seqnum = 2;
 
-    bool storage_shard_change = 3;
-    repeated uint32 active_storage_shard_ids = 4; //sorted ascending
+    uint32 metalog_seqnum_last_storage_shard_change = 3;
+    bool storage_shard_change = 4;
+    repeated uint32 active_storage_shard_ids = 5; //sorted ascending
 
     enum Type {
         INVALID  = 0;
         NEW_LOGS = 1;
         TRIM     = 2;
     }
-    Type type = 5;
+    Type type = 6;
 
     message NewLogsProto {
         uint32          start_seqnum = 1;
         repeated uint32 shard_starts = 2;
         repeated uint32 shard_deltas = 3;
     }
-    NewLogsProto new_logs_proto = 6;
+    NewLogsProto new_logs_proto = 7;
 
     message TrimProto {
         uint32 user_logspace = 1;
         uint64 user_tag      = 2;
         uint64 trim_seqnum   = 3;
     }
-    TrimProto trim_proto = 7;
+    TrimProto trim_proto = 8;
 }
 
 message MetaLogsProto {
@@ -123,20 +124,24 @@ message LogEntryProto {
 
 message IndexDataProto {
     uint32 logspace_id  = 1;
-
     uint32 index_shard = 2;
 
-    repeated uint32 metalog_positions = 3;
-    repeated uint32 num_active_storage_shards = 4;
-    repeated uint32 my_active_storage_shards = 5;
-    repeated uint32 next_seqnum_positions = 6;
+    message MetaHeader {
+        uint32 metalog_position = 1;
+        uint32 old_metalog_position = 2;
+        uint32 end_seqnum_position = 3;
+        uint32 num_active_storage_shards = 4;
+        repeated uint32 my_active_storage_shards = 5;
+    }
 
-    repeated uint32 user_logspaces = 7;
+    repeated MetaHeader meta_headers = 3;
 
-    repeated uint32 seqnum_halves  = 8;
-    repeated uint32 engine_ids     = 9;
-    repeated uint32 user_tag_sizes = 10;
-    repeated uint64 user_tags      = 11;
+    repeated uint32 user_logspaces = 4;
+
+    repeated uint32 seqnum_halves  = 5;
+    repeated uint32 engine_ids     = 6;
+    repeated uint32 user_tag_sizes = 7;
+    repeated uint64 user_tags      = 8;
 }
 
 message IndexResultProto {
