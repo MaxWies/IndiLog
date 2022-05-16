@@ -38,6 +38,13 @@ bool SeqnumCache::Get(uint64_t seqnum, uint16_t* storage_shard_id){
     }
 }
 
+void SeqnumCache::Aggregate(size_t* num_seqnums, size_t* size){
+    int64_t num_records = 0;
+    dbm_->Count(&num_records);
+    *num_seqnums = gsl::narrow_cast<size_t>(num_records);
+    *size = gsl::narrow_cast<size_t>(dbm_->GetEffectiveDataSize());
+}
+
 IndexQueryResult SeqnumCache::MakeQuery(const IndexQuery& query){
     uint16_t storage_shard_id;
     if(Get(query.query_seqnum, &storage_shard_id)){

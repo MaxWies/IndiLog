@@ -42,6 +42,7 @@ DISABLE_STAT = 1
 DEBUG_BUILD = 0
 BUILD_BENCH = 0
 FORCE_DCHECK = 0
+ENABLE_STAT_THREAD = 0
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk
@@ -57,6 +58,10 @@ endif
 
 ifeq ($(FORCE_DCHECK),1)
 COMPILE_FLAGS += -DDCHECK_ALWAYS_ON
+endif
+
+ifeq ($(ENABLE_STAT_THREAD),1)
+COMPILE_FLAGS += -D__FAAS_STAT_THREAD
 endif
 
 # Function used to check variables. Use on the command line:

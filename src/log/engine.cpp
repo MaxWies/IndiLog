@@ -1,5 +1,11 @@
 #include "log/engine.h"
 
+#ifdef __FAAS_STAT_THREAD
+#include <iostream>
+#include <fstream>
+#include "utils/timerfd.h"
+#endif 
+
 #include "engine/engine.h"
 #include "log/flags.h"
 #include "utils/bits.h"
@@ -30,7 +36,21 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {
+      current_view_active_(false)
+#ifdef __FAAS_STAT_THREAD
+      ,
+      statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
+      statistics_thread_started_(false),
+      previous_total_ops_counter_(0),
+      append_ops_counter_(0),
+      read_ops_counter_(0),
+      local_index_hit_counter_(0),
+      local_index_miss_counter_(0),
+      index_min_read_ops_counter_(0),
+      log_cache_hit_counter_(0),
+      log_cache_miss_counter_(0) 
+#endif 
+      {
           if(absl::GetFlag(FLAGS_slog_engine_index_tier_only)){
               indexing_strategy_ = IndexingStrategy::INDEX_TIER_ONLY;
           } else{
@@ -100,6 +120,13 @@ void Engine::OnViewCreated(const View* view) {
         current_view_ = view;
         views_.push_back(view);
         log_header_ = fmt::format("LogEngine[{}-{}]: ", my_node_id(), view->id());
+#ifdef __FAAS_STAT_THREAD
+        // todo: use zookeeper sync
+        if (!statistics_thread_started_){
+            statistics_thread_.Start();
+            statistics_thread_started_ = true;   
+        }   
+#endif 
     }
 }
 
@@ -277,6 +304,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             next_seqnum = locked_producer->seqnum_position();
         }
     }
+#ifdef __FAAS_STAT_THREAD
+    append_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
     if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED || op->user_tags.empty() || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
         ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
         return;
@@ -329,6 +359,9 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
+#ifdef __FAAS_STAT_THREAD
+    local_index_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
     HVLOG_F(1, "Sent request to index tier successfully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
     return;
 }
@@ -344,6 +377,9 @@ void Engine::HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t vi
         HLOG_F(WARNING, "Failed to send index tier request for min seqnum of tag {}", tag);
         return;
     }
+#ifdef __FAAS_STAT_THREAD
+    index_min_read_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
     HVLOG_F(1, "Sent request to index tier for min seqnum of tag {} successfully", tag);
 }
 
@@ -381,6 +417,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
+#ifdef __FAAS_STAT_THREAD
+    read_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
     if (indexing_strategy_ == IndexingStrategy::INDEX_TIER_ONLY){
         HandleIndexTierRead(op, view_id, storage_shard);
         return;
@@ -850,6 +889,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
         // Cache hits
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+#ifdef __FAAS_STAT_THREAD
+        log_cache_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
         const LogEntry& log_entry = cached_log_entry.value();
         std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
         std::span<const char> aux_data;
@@ -885,6 +927,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
     } else {
         // Cache miss
+#ifdef __FAAS_STAT_THREAD
+        log_cache_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
         const View::StorageShard* storage_shard = nullptr;
         {
             absl::ReaderMutexLock view_lk(&view_mu_);
@@ -954,6 +999,9 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
         const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
+#ifdef __FAAS_STAT_THREAD
+        local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
             ProcessIndexFoundResult(result);
             if (result.original_query.user_tag == kEmptyLogTag){
                 if (seqnum_cache_.has_value()){
@@ -962,7 +1010,6 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
             }
             break;
         case IndexQueryResult::kEmpty:
-            HVLOG(1) << "No result for query. Request must be handled by index tier";
             local_index_misses->push_back(result);
             break;
         case IndexQueryResult::kContinue:
@@ -1105,6 +1152,113 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
     query.prev_found_result = result.found_result;
     return query;
 }
+
+#ifdef __FAAS_STAT_THREAD
+    void Engine::StatisticsThreadMain() {
+        int timerfd = io_utils::CreateTimerFd();
+        CHECK(timerfd != -1) << "Failed to create timerfd";
+        io_utils::FdUnsetNonblocking(timerfd);
+        absl::Duration interval = absl::Seconds(10);
+        CHECK(io_utils::SetupTimerFdPeriodic(timerfd, absl::Seconds(1), interval))
+            << "Failed to setup timerfd with interval " << interval;
+        bool running = true;
+        while (running) {
+            uint64_t exp;
+            ssize_t nread = read(timerfd, &exp, sizeof(uint64_t));
+            if (nread < 0) {
+                PLOG(FATAL) << "Failed to read on timerfd";
+            }
+            CHECK_EQ(gsl::narrow_cast<size_t>(nread), sizeof(uint64_t));
+            uint64_t total_op_counter = 
+                append_ops_counter_.load()
+                + read_ops_counter_.load();
+            if (total_op_counter != previous_total_ops_counter_){
+                size_t suffix_chain_links = 0;
+                size_t suffix_chain_num_ranges = 0;
+                size_t suffix_chain_size = 0;
+                size_t seqnum_cache_num_seqnums = 0;
+                size_t seqnum_cache_size = 0;
+                size_t tag_cache_num_tags = 0;
+                size_t tag_cache_seqnums = 0;
+                size_t tag_cache_size = 0;
+                size_t complete_index_num_seqnums = 0;
+                size_t complete_index_num_tags = 0;
+                size_t complete_index_num_seqnums_of_tags = 0;
+                size_t complete_index_size = 0;
+                {
+                    absl::ReaderMutexLock view_lk(&view_mu_);
+                    suffix_chain_collection_.ForEachLogSpace(
+                        [&] (uint32_t id, LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
+                            auto ptr = suffix_chain_ptr.Lock();
+                            ptr->Aggregate(&suffix_chain_links, &suffix_chain_num_ranges, &suffix_chain_size);
+                        }
+                    );
+                    seqnum_cache_->Aggregate(&seqnum_cache_num_seqnums, &seqnum_cache_size);
+                    tag_cache_collection_.ForEachLogSpace(
+                        [&] (uint32_t id, LockablePtr<TagCache> tag_cache_ptr) {
+                            auto ptr = tag_cache_ptr.Lock();
+                            ptr->Aggregate(&tag_cache_num_tags, &tag_cache_seqnums, &tag_cache_size);
+                        }
+                    );
+                    index_collection_.ForEachActiveLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
+                        }
+                    );
+                    index_collection_.ForEachFinalizedLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
+                        }
+                    );
+                }
+                std::string statistics = 
+                    fmt::format(
+                    "{{"
+                        "\"ops\":"
+                            "{{"
+                                "\"append\":{},\"read\":{},\"index_read_hit\":{},\"index_read_miss\":{},\"index_read_min\":{},\"log_cache_hit\":{},\"log_cache_miss\":{}"
+                            "}},"
+                        "\"suffix_chain\":"
+                            "{{"
+                                "\"links\":{},\"ranges\":{},\"size\":{}"
+                            "}},"
+                        "\"seqnum_cache\":"
+                            "{{"
+                                "\"seqnums\":{},\"size\":{}"
+                            "}},"
+                        "\"tag_cache\":"
+                            "{{"
+                                "\"tags\":{},\"seqnums\":{},\"size\":{}"
+                            "}},"
+                        "\"local_index\":"
+                            "{{"
+                                "\"size\":{}"
+                            "}},"
+                        "\"complete_index\":"
+                            "{{"
+                                "\"seqnums\":{},\"tags\":{},\"seqnums_of_tags\":{},\"size\":{}"
+                            "}}"
+                    "}}\n",
+                    append_ops_counter_.load(), read_ops_counter_.load(), 
+                        local_index_hit_counter_.load(), local_index_miss_counter_.load(), 
+                        index_min_read_ops_counter_.load(), 
+                        log_cache_hit_counter_.load(), log_cache_miss_counter_.load(),
+                    suffix_chain_links, suffix_chain_num_ranges, suffix_chain_size,
+                    seqnum_cache_num_seqnums, seqnum_cache_size,
+                    tag_cache_num_tags, tag_cache_seqnums, tag_cache_size,
+                    suffix_chain_size + seqnum_cache_size + tag_cache_size,
+                    complete_index_num_seqnums, complete_index_num_tags, complete_index_num_seqnums_of_tags, complete_index_size 
+                );
+                std::ofstream dix_st_file(fmt::format("/tmp/boki/stats/engine-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
+                dix_st_file << statistics;
+                dix_st_file.close();
+                previous_total_ops_counter_ = total_op_counter;
+            }
+        }
+    }      
+#endif
 
 }  // namespace log
 }  // namespace faas

@@ -48,6 +48,19 @@ private:
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_reads_;
 
+#ifdef __FAAS_STAT_THREAD
+    base::Thread statistics_thread_;
+    bool statistics_thread_started_;
+    uint64_t previous_total_ops_counter_;
+    std::atomic<uint64_t> append_ops_counter_;
+    std::atomic<uint64_t> read_ops_counter_;
+    std::atomic<uint64_t> local_index_hit_counter_;
+    std::atomic<uint64_t> local_index_miss_counter_;
+    std::atomic<uint64_t> index_min_read_ops_counter_;
+    std::atomic<uint64_t> log_cache_hit_counter_;
+    std::atomic<uint64_t> log_cache_miss_counter_;         
+#endif
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
@@ -97,6 +110,10 @@ private:
     IndexQuery BuildIndexTierQuery(LocalOp* op, uint16_t master_node_id);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
+
+#ifdef __FAAS_STAT_THREAD
+    void StatisticsThreadMain();        
+#endif
 
     DISALLOW_COPY_AND_ASSIGN(Engine);
 };

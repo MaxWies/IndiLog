@@ -126,14 +126,11 @@ void SeqnumSuffixChain::PollQueryResults(QueryResultVec* results) {
     pending_query_results_.clear();
 }
 
-size_t SeqnumSuffixChain::ComputeSize(){
-    size_t size = 0;
+void SeqnumSuffixChain::Aggregate(size_t* link_entries, size_t* range_entries, size_t* size){
     for (const auto& chain_member : suffix_chain_){
-        size += sizeof(chain_member.first);
-        size += sizeof(chain_member.second);
-        size += chain_member.second->ComputeSize();
+        chain_member.second->Aggregate(link_entries, range_entries, size);      // member
+        size += sizeof(uint16_t) * 1;                                           // key
     }
-    return size;
 }
 
 bool SeqnumSuffixChain::IsEmpty(){
@@ -432,17 +429,20 @@ void SeqnumSuffixLink::Trim(size_t* counter){
     *counter -= r;
 }
 
-size_t SeqnumSuffixLink::ComputeSize(){
-    size_t size = 0;
-    for(auto& [key, entry] : entries_){
-        size += sizeof(key);
-        size += sizeof(entry);
-    }
-    return size;
-}
-
 size_t SeqnumSuffixLink::NumEntries(){
     return entries_.size();
+}
+
+void SeqnumSuffixLink::Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size){
+    *num_link_entries += entries_.size();
+    for(auto entry : entries_){
+        *num_range_entries += entry.second.storage_shard_ids_.size();
+        *size += (
+              sizeof(uint32_t) * 1                                          // key
+            + sizeof(uint16_t) * entry.second.storage_shard_ids_.size()     // productive shards
+            + sizeof(uint8_t) * entry.second.key_diffs_.size()              // relative seqnums
+        );
+    }
 }
 
 void SeqnumSuffixLink::GetHead(uint64_t* seqnum, uint16_t* storage_shard_id){

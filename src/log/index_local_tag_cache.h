@@ -38,6 +38,7 @@ public:
     void Remove(uint64_t popularity);
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
     bool TagExists(uint64_t tag);
+    void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
 
     IndexQueryResult::State FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
                                      uint64_t* seqnum, uint16_t* engine_id) const;
@@ -89,6 +90,7 @@ public:
     void PollQueryResults(QueryResultVec* results);
     bool TagExists(uint32_t user_logspace, uint64_t tag);
     void InstallView(uint16_t view_id);
+    void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
 
     uint32_t identifier(){
         return bits::JoinTwo16(0, sequencer_id_);

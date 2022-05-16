@@ -2,7 +2,10 @@ FROM maxwie/deps:latest as builder
 
 WORKDIR /boki
 RUN rm -rf ./src
+
+COPY Makefile config.mk ./
 COPY ./src ./src
+
 RUN CXX=clang++ make -j $(nproc)
 
 FROM ubuntu:focal as release

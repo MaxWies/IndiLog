@@ -54,8 +54,8 @@ public:
     void Trim(size_t* counter);
     bool IsEmpty();
 
-    size_t ComputeSize();
     size_t NumEntries();
+    void Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size);
 
     void GetHead(uint64_t* seqnum, uint16_t* storage_shard_id);
     void GetTail(uint64_t* seqnum, uint16_t* storage_shard_id);
@@ -110,7 +110,7 @@ public:
     void ProvideMetaLog(const MetaLogProto& metalog_proto);
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
-    size_t ComputeSize();
+    void Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size);
 
 private:
     uint16_t sequence_number_id_;

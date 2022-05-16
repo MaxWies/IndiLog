@@ -75,6 +75,8 @@ public:
     bool TryCompleteIndexUpdates(uint32_t* seqnum_position);
     bool CheckIfNewIndexData(const IndexDataProto& index_data);
 
+    void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
+
     uint32_t indexed_metalog_position(){
         return indexed_metalog_position_;
     }

@@ -151,12 +151,12 @@ template<class T>
 void PhysicalLogSpaceCollection<T>::ForEachLogSpace(IterCallback cb) const {
     auto iter = log_spaces_.begin();
     while (iter != log_spaces_.end()) {
-        DCHECK(log_spaces_.contains(*iter));
-        cb(*iter, log_spaces_.at(*iter));
+        uint32_t id = iter->first;
+        DCHECK(log_spaces_.contains(id));
+        cb(id, log_spaces_.at(id));
         iter++;
     }
 }
-
 
 template<class T>
 class LogSpaceCollection {

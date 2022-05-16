@@ -203,6 +203,33 @@ bool PerSpaceTagCache::TagEntryExists(uint64_t key){
     return tags_.count(key) > 0;
 }
 
+void PerSpaceTagCache::Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size){
+    size_t num_min_seqnums = 0;
+    size_t num_tag_suffix = 0;
+    size_t num_suffix_seqnums = 0;
+    for (auto& [key, tag_entry] : tags_){
+        if (tag_entry->seqnum_min_ != kInvalidLogSeqNum){
+            num_min_seqnums += 1;
+        }
+        num_tag_suffix += tag_entry->tag_suffix_.size();
+        for (auto& [view_id, suffix_link] : tag_entry->tag_suffix_){
+            num_suffix_seqnums += suffix_link.size();
+        }
+    }
+    *num_tags += tags_.size();
+    *num_seqnums += (num_min_seqnums + num_suffix_seqnums);
+    *size += (
+        (sizeof(uint64_t)                       // seqnum_min
+        + sizeof(uint16_t)                      // storage_shard_id_min
+        + sizeof(uint64_t)                      // popularity
+        + sizeof(bool)                          // complete flag
+        ) * tags_.size()
+        + sizeof(uint16_t) * num_tag_suffix     // all keys of suffix entries
+        + sizeof(uint32_t) * num_suffix_seqnums // all keys of suffix links
+        + sizeof(uint16_t) * num_suffix_seqnums // all storage shard values of suffix links
+    );
+}
+
 IndexQueryResult::State PerSpaceTagCache::FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
                                                    uint64_t* seqnum, uint16_t* storage_shard_id) const {
     HVLOG_F(1, "FindPrev(query_tag={}, query_seqnum={}): Start", user_tag, bits::HexStr0x(query_seqnum));
@@ -514,6 +541,15 @@ void TagCache::InstallView(uint16_t view_id){
     TagCacheView* tag_cache_view = new TagCacheView(view_id);
     views_[view_id].reset(tag_cache_view);
     latest_view_id_ = view_id;
+}
+
+void TagCache::Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size){
+    for (auto& [user_logspace, per_space_tag_cache] : per_space_cache_){
+        per_space_tag_cache->Aggregate(num_tags, num_seqnums, size);
+        *size += (
+            sizeof(uint32_t) * 1        // user_logspace key
+        );
+    }
 }
 
 bool TagCache::AdvanceIndexProgress(uint16_t view_id){

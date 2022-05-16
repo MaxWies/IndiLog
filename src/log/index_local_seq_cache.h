@@ -16,6 +16,7 @@ public:
 
     void Put(uint64_t seqnum, uint16_t storage_shard_id);
     bool Get(uint64_t seqnum, uint16_t* storage_shard_id);
+    void Aggregate(size_t* num_seqnums, size_t* size);
     IndexQueryResult MakeQuery(const IndexQuery& query);
 
 private:
