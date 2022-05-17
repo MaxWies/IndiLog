@@ -78,7 +78,7 @@ void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
             break;
         }
         const IndexQuery& query = iter->second;
-        ProcessQuery(query);
+        pending_query_results_.push_back(ProcessQuery(query));
         iter = pending_queries_.erase(iter);
     }
     if (max_suffix_seq_entries_ < current_entries_){
@@ -105,8 +105,9 @@ void SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
     if (query_view_id == view_id()){
         uint32_t position = bits::LowHalf64(query.metalog_progress);
         if (metalog_position() < position){
-            HLOG_F(INFO, "Future metalog {}. My metalog_position is {}", position, metalog_position());
+            HLOG_F(INFO, "Query with future metalog {}. My metalog_position is {}", position, metalog_position());
             pending_queries_.insert(std::make_pair(position, query));
+            return;
         }
     }
     pending_query_results_.push_back(ProcessQuery(query));
@@ -175,6 +176,7 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
     HVLOG_F(1, "SuffixRead: ProcessReadNext: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     if (IsEmpty()){
+        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
         return BuildNotFoundResult(query);
     }
     // check if seqnum lies at head, left next to it or before
@@ -253,6 +255,7 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
     HVLOG_F(1, "SuffixRead: ProcessReadPrev: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     if (IsEmpty()) {
+        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
         return BuildNotFoundResult(query);
     }
     // check if seqnum lies at head, left next to it or before

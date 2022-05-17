@@ -77,7 +77,8 @@ static inline bool TagSuffixLinkFindPrev(const TagSuffixLink& link, uint32_t ide
             return false;
         }
     }
-    if(it == link.end()){
+    if(it == link.end() || it->first != local_seqnum){
+        // get lower
         --it;
     }
     *seqnum = bits::JoinTwo32(identifier, it->first);
