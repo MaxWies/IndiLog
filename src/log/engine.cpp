@@ -49,7 +49,7 @@ Engine::Engine(engine::Engine* engine)
       index_min_read_ops_counter_(0),
       log_cache_hit_counter_(0),
       log_cache_miss_counter_(0) 
-#endif 
+#endif
       {
           if(absl::GetFlag(FLAGS_slog_engine_index_tier_only)){
               indexing_strategy_ = IndexingStrategy::INDEX_TIER_ONLY;
@@ -278,6 +278,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     DCHECK(op->type == SharedLogOpType::APPEND);
     HVLOG_F(1, "Handle local append: op_id={}, logspace={}, num_tags={}, size={}",
             op->id, op->user_logspace, op->user_tags.size(), op->data.length());
+#ifdef __FAAS_OP_TRACING
+    SaveTracePoint(op->id, "HandleLocalAppend");
+#endif
     const View* view = nullptr;
     const View::StorageShard* storage_shard = nullptr;
     LogMetaData log_metadata = MetaDataFromAppendOp(op);
@@ -302,6 +305,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             auto locked_producer = producer_ptr.Lock();
             locked_producer->LocalAppend(op, &log_metadata.localid);
             next_seqnum = locked_producer->seqnum_position();
+#ifdef __FAAS_OP_TRACING
+            SaveTracePoint(op->id, "AfterPutToPendingList");
+#endif
         }
     }
 #ifdef __FAAS_STAT_THREAD
@@ -362,6 +368,9 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
 #ifdef __FAAS_STAT_THREAD
     local_index_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
+#ifdef __FAAS_OP_TRACING
+    SaveTracePoint(op->id, "SentIndexTierReadRequest");
+#endif
     HVLOG_F(1, "Sent request to index tier successfully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
     return;
 }
@@ -389,6 +398,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
           || op->type == SharedLogOpType::READ_NEXT_B);
     HVLOG_F(1, "Handle local read: op_id={}, logspace={}, tag={}, seqnum={}",
             op->id, op->user_logspace, op->query_tag, bits::HexStr0x(op->seqnum));
+#ifdef __FAAS_OP_TRACING
+    SaveTracePoint(op->id, "HandleLocalRead");
+#endif
     onging_reads_.PutChecked(op->id, op);
     uint32_t logspace_id;
     uint16_t view_id;
@@ -490,6 +502,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
             HVLOG_F(1, "There is no index for logspace {}. Send to index tier", logspace_id);
             HandleIndexTierRead(op, view_id, storage_shard);
         }
+#ifdef __FAAS_OP_TRACING
+    SaveTracePoint(op->id, "CompleteIndexQueryingDone");
+#endif
     } else {
         UNREACHABLE();
     }
@@ -561,6 +576,12 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
+#ifdef __FAAS_OP_TRACING
+            for(auto const &[c, pending_append] : locked_producer->GetPendingAppends()){
+                LocalOp* op = reinterpret_cast<LocalOp*>(pending_append);
+                SaveOrIncreaseTracePoint(op->id, "ReceiveNewMetaLogs");
+            }
+#endif
             for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                 locked_producer->ProvideMetaLog(metalog_proto);
             }
@@ -668,6 +689,9 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             );
             return;
         }
+#ifdef __FAAS_OP_TRACING
+        SaveTracePoint(op->id, "ReceiveResponseFrom(Index|Storage)");
+#endif
         if (result == SharedLogResultType::READ_OK) {
             uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
             HVLOG_F(1, "Receive remote read response for log (seqnum {})", seqnum);
@@ -867,6 +891,9 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
 void Engine::ProcessAppendResults(const LogProducer::AppendResultVec& results) {
     for (const LogProducer::AppendResult& result : results) {
         LocalOp* op = reinterpret_cast<LocalOp*>(result.caller_data);
+#ifdef __FAAS_OP_TRACING
+        SaveTracePoint(op->id, "ProcessAppendResult");
+#endif
         if (result.seqnum != kInvalidLogSeqNum) {
             LogMetaData log_metadata = MetaDataFromAppendOp(op);
             log_metadata.seqnum = result.seqnum;
@@ -911,6 +938,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
         if (local_request) {
             LocalOp* op = onging_reads_.PollChecked(query.client_data);
+#ifdef __FAAS_OP_TRACING
+    SaveTracePoint(op->id, "ProcessIndexFoundResult");
+#endif
             Message response = BuildLocalReadOKResponse(log_entry);
             response.log_aux_data_size = gsl::narrow_cast<uint16_t>(aux_data.size());
             MessageHelper::AppendInlineData(&response, aux_data);
@@ -1193,7 +1223,9 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                             ptr->Aggregate(&suffix_chain_links, &suffix_chain_num_ranges, &suffix_chain_size);
                         }
                     );
-                    seqnum_cache_->Aggregate(&seqnum_cache_num_seqnums, &seqnum_cache_size);
+                    if(seqnum_cache_.has_value()){
+                        seqnum_cache_->Aggregate(&seqnum_cache_num_seqnums, &seqnum_cache_size);
+                    }
                     tag_cache_collection_.ForEachLogSpace(
                         [&] (uint32_t id, LockablePtr<TagCache> tag_cache_ptr) {
                             auto ptr = tag_cache_ptr.Lock();
@@ -1251,10 +1283,37 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                     suffix_chain_size + seqnum_cache_size + tag_cache_size,
                     complete_index_num_seqnums, complete_index_num_tags, complete_index_num_seqnums_of_tags, complete_index_size 
                 );
-                std::ofstream dix_st_file(fmt::format("/tmp/boki/stats/engine-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
-                dix_st_file << statistics;
-                dix_st_file.close();
+                std::ofstream st_file(fmt::format("/tmp/boki/stats/engine-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
+                st_file << statistics;
+                st_file.close();
                 previous_total_ops_counter_ = total_op_counter;
+#ifdef __FAAS_OP_TRACING
+                absl::MutexLock trace_mu_lk(&trace_mu_);
+                std::ostringstream append_results;
+                std::ostringstream read_results;
+                auto it = finished_traces_.begin();
+                while (it != finished_traces_.end()){
+                    if (!traces_.contains(*it)){
+                        PLOG(FATAL) << "Trace must still be in trace map";
+                    }
+                    PrintTrace(&append_results, &read_results, traces_.at(*it).get());
+                    traces_.erase(*it);
+                    ++it;
+                }
+                finished_traces_.clear();
+                {
+                    std::ofstream trace_file;
+                    trace_file.open(fmt::format("/tmp/boki/stats/traces-append-{}", my_node_id()), std::fstream::app);
+                    trace_file << append_results.str();
+                    trace_file.close();
+                }
+                {
+                    std::ofstream trace_file;
+                    trace_file.open(fmt::format("/tmp/boki/stats/traces-read-{}", my_node_id()), std::fstream::app);
+                    trace_file << read_results.str();
+                    trace_file.close();
+                }
+#endif
             }
         }
     }      

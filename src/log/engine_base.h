@@ -113,6 +113,28 @@ protected:
 
     server::IOWorker* SomeIOWorker();
 
+#ifdef __FAAS_OP_TRACING
+
+struct OpTrace{
+    protocol::SharedLogOpType type;
+    std::vector<int64_t> absolute_ts;
+    std::vector<int64_t> relative_ts;
+    std::vector<std::string> func_desc;
+};
+
+    absl::Mutex trace_mu_;
+    const uint32_t trace_granularity_ = 1000;
+    absl::flat_hash_map<uint64_t, std::unique_ptr<OpTrace>> traces_ ABSL_GUARDED_BY(trace_mu_);
+    absl::flat_hash_set<uint64_t> finished_traces_ ABSL_GUARDED_BY(trace_mu_);
+
+    bool IsOpTraced(uint64_t id);
+    void InitTrace(uint64_t id, protocol::SharedLogOpType type, int64_t first_ts, const std::string func_desc);
+    void SaveTracePoint(uint64_t id, const std::string func_desc);
+    void SaveOrIncreaseTracePoint(uint64_t id, const std::string func_desc);
+    void CompleteTrace(uint64_t id, const std::string func_desc);
+    void PrintTrace(std::ostringstream* append_results, std::ostringstream* read_results, const OpTrace* op_trace);
+#endif
+
 private:
     const uint16_t node_id_;
     engine::Engine* engine_;

@@ -343,7 +343,7 @@ IndexQueryResult::State PerSpaceTagCache::FindNext(uint64_t query_seqnum, uint64
             return IndexQueryResult::kEmpty;
         }
     } else if (query_seqnum == *seqnum) {
-        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum is in gap -> found", user_tag, bits::HexStr0x(query_seqnum));
+        HVLOG_F(1, "FindNext(query_tag={}, query_seqnum={}): Seqnum is on head -> found", user_tag, bits::HexStr0x(query_seqnum));
         tag_entry.popularity_ = popularity;
         return IndexQueryResult::kFound;
     }

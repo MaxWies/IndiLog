@@ -171,6 +171,9 @@ void EngineBase::PopulateLogTagsAndData(const Message& message, LocalOp* op) {
 }
 
 void EngineBase::OnMessageFromFuncWorker(const Message& message) {
+#ifdef __FAAS_OP_TRACING
+    int64_t func_ctx_ts = GetMonotonicMicroTimestamp();
+#endif
     protocol::FuncCall func_call = MessageHelper::GetFuncCall(message);
     FnCallContext ctx;
     {
@@ -218,6 +221,9 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
         HLOG(FATAL) << "Unknown shared log op type: " << message.log_op;
     }
 
+#ifdef __FAAS_OP_TRACING
+    InitTrace(op->id, op->type, func_ctx_ts, "InitByUsingMessageFromFuncWorker");
+#endif
     LocalOpHandler(op);
 }
 
@@ -277,6 +283,9 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
+#ifdef __FAAS_OP_TRACING
+    CompleteTrace(op->id, "FinishedOpAndSentResponse");
+#endif
     log_op_pool_.Return(op);
 }
 
@@ -420,6 +429,124 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
 server::IOWorker* EngineBase::SomeIOWorker() {
     return engine_->SomeIOWorker();
 }
+
+#ifdef __FAAS_OP_TRACING
+
+bool EngineBase::IsOpTraced(uint64_t id){
+    return 0 == id % trace_granularity_;
+}
+
+void EngineBase::InitTrace(uint64_t id, SharedLogOpType type, int64_t first_ts, const std::string func_desc){
+    if(!IsOpTraced(id)){
+        return;
+    }
+    HVLOG_F(1, "Init trace for {}", id);
+    absl::MutexLock trace_mu_lk(&trace_mu_);
+    OpTrace* trace = new OpTrace {
+        .type = type
+    };
+    int64_t now_ts = GetMonotonicMicroTimestamp();
+    trace->func_desc.push_back("Start");
+    trace->func_desc.push_back(func_desc);
+    trace->relative_ts.push_back(0);
+    trace->relative_ts.push_back(now_ts-first_ts);
+    trace->absolute_ts.push_back(first_ts);
+    trace->absolute_ts.push_back(now_ts);
+    traces_[id].reset(trace);
+}
+
+void EngineBase::SaveTracePoint(uint64_t function_call_id, const std::string func_desc){
+    uint64_t id = function_call_id >> 4;
+    if(!IsOpTraced(id)){
+        return;
+    }
+    absl::MutexLock trace_mu_lk(&trace_mu_);
+    if (traces_.contains(id)){
+        OpTrace* trace = traces_.at(id).get();
+        int64_t now_ts = GetMonotonicMicroTimestamp();
+        trace->func_desc.push_back(func_desc);
+        trace->relative_ts.push_back(now_ts-trace->absolute_ts.back());
+        trace->absolute_ts.push_back(now_ts);
+    } else {
+        HLOG_F(WARNING, "Trace Point for {} not in traces", id);
+    }
+}
+
+void EngineBase::SaveOrIncreaseTracePoint(uint64_t function_call_id, const std::string func_desc){
+    uint64_t id = function_call_id >> 4;
+    if(!IsOpTraced(id)){
+        return;
+    }
+    absl::MutexLock trace_mu_lk(&trace_mu_);
+    if (traces_.contains(id)){
+        OpTrace* trace = traces_.at(id).get();
+        int64_t now_ts = GetMonotonicMicroTimestamp();
+        int64_t last_absolute_ts = trace->absolute_ts.back();
+        if (!trace->func_desc.back().compare(func_desc)){
+            int64_t relative_ts = trace->relative_ts.back();
+            trace->relative_ts.pop_back();
+            trace->relative_ts.push_back(relative_ts + now_ts - last_absolute_ts);
+            trace->absolute_ts.pop_back();
+            trace->absolute_ts.push_back(now_ts);
+        } else {
+            trace->func_desc.push_back(func_desc);
+            trace->relative_ts.push_back(now_ts-last_absolute_ts);
+            trace->absolute_ts.push_back(now_ts);
+        }
+    } else {
+        HLOG_F(WARNING, "Trace Point for {} not in traces", id);
+    }
+}
+
+void EngineBase::CompleteTrace(uint64_t function_call_id, const std::string func_desc){
+    uint64_t id = function_call_id >> 4;
+    if(!IsOpTraced(id)){
+        return;
+    }
+    HVLOG_F(1, "Complete trace for {}", id);
+    absl::MutexLock trace_mu_lk(&trace_mu_);
+    if (traces_.contains(id)){
+        OpTrace* trace = traces_.at(id).get();
+        int64_t now_ts = GetMonotonicMicroTimestamp();
+        trace->func_desc.push_back(func_desc);
+        trace->relative_ts.push_back(now_ts-trace->absolute_ts.back());
+        trace->absolute_ts.push_back(now_ts);
+        finished_traces_.insert(id);
+    } else {
+        HLOG_F(WARNING, "Trace Point for {} not in traces", id);
+    }
+}
+
+void EngineBase::PrintTrace(std::ostringstream* append_results, std::ostringstream* read_results, const OpTrace* op_trace){
+    switch(op_trace->type){
+    case SharedLogOpType::APPEND:
+        for (std::string func_desc : op_trace->func_desc){
+            *append_results << func_desc << ", ";
+        }
+        *append_results << "\n";
+        for (int64_t ts : op_trace->relative_ts){
+            *append_results << std::to_string(ts) << ", ";
+        }
+        *append_results << "\n";
+        break;
+    case SharedLogOpType::READ_NEXT:
+    case SharedLogOpType::READ_PREV:
+    case SharedLogOpType::READ_NEXT_B:
+        for (std::string func_desc : op_trace->func_desc){
+            *read_results << func_desc << ", ";
+        }
+        *read_results << "\n";
+        for (int64_t ts : op_trace->relative_ts){
+            *read_results << std::to_string(ts) << ", ";
+        }
+        *read_results << "\n";
+        break;
+    default:
+        break;
+    }
+}
+
+#endif
 
 }  // namespace log
 }  // namespace faas

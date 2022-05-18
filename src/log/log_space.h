@@ -71,6 +71,12 @@ public:
     using AppendResultVec = absl::InlinedVector<AppendResult, 4>;
     void PollAppendResults(AppendResultVec* results);
 
+#ifdef __FAAS_OP_TRACING
+    const absl::flat_hash_map<uint64_t, void*>& GetPendingAppends(){
+        return pending_appends_;
+    }
+#endif
+
 private:
     uint64_t next_localid_;
     absl::flat_hash_map</* localid */ uint64_t,

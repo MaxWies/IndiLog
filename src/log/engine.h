@@ -58,7 +58,7 @@ private:
     std::atomic<uint64_t> local_index_miss_counter_;
     std::atomic<uint64_t> index_min_read_ops_counter_;
     std::atomic<uint64_t> log_cache_hit_counter_;
-    std::atomic<uint64_t> log_cache_miss_counter_;         
+    std::atomic<uint64_t> log_cache_miss_counter_;
 #endif
 
     void OnViewCreated(const View* view) override;
