@@ -52,6 +52,9 @@ private:
     base::Thread statistics_thread_;
     bool statistics_thread_started_;
     uint64_t previous_total_ops_counter_;
+#endif
+
+#ifdef __FAAS_ENGINE_STATISTICS
     std::atomic<uint64_t> append_ops_counter_;
     std::atomic<uint64_t> read_ops_counter_;
     std::atomic<uint64_t> local_index_hit_counter_;

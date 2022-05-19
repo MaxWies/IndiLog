@@ -271,7 +271,7 @@ void EngineBase::PropagateAuxData(const View* view, const View::StorageShard* st
 }
 
 void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
-                                           uint64_t metalog_progress) {
+                                           uint64_t metalog_progress, bool success) {
     if (metalog_progress > 0) {
         absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
         if (fn_call_ctx_.contains(op->func_call_id)) {
@@ -280,6 +280,13 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
                 ctx.metalog_progress = metalog_progress;
             }
         }
+#ifdef __FAAS_OP_LATENCY
+        finished_operations_.push_back(OpLatency{
+            .type = op->type,
+            .duration = GetMonotonicMicroTimestamp() - op->start_timestamp,
+            .success = success
+        });
+#endif
     }
     response->log_client_data = op->client_data;
     engine_->SendFuncWorkerMessage(op->client_id, response);
@@ -292,7 +299,7 @@ void EngineBase::FinishLocalOpWithResponse(LocalOp* op, Message* response,
 void EngineBase::FinishLocalOpWithFailure(LocalOp* op, SharedLogResultType result,
                                           uint64_t metalog_progress) {
     Message response = MessageHelper::NewSharedLogOpFailed(result);
-    FinishLocalOpWithResponse(op, &response, metalog_progress);
+    FinishLocalOpWithResponse(op, &response, metalog_progress, false);
 }
 
 void EngineBase::LogCachePut(const LogMetaData& log_metadata,
@@ -429,6 +436,27 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
 server::IOWorker* EngineBase::SomeIOWorker() {
     return engine_->SomeIOWorker();
 }
+
+#ifdef __FAAS_OP_LATENCY
+void EngineBase::PrintOpLatencies(std::ostringstream* append_results, std::ostringstream* read_results){
+    absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+    for (OpLatency op : finished_operations_){
+        switch(op.type){
+        case SharedLogOpType::APPEND:
+            *append_results << std::to_string(op.duration) << (op.success? ",1\n" : ",0\n");
+            break;
+        case SharedLogOpType::READ_NEXT:
+        case SharedLogOpType::READ_PREV:
+        case SharedLogOpType::READ_NEXT_B:
+            *read_results << std::to_string(op.duration) << (op.success? ",1\n" : ",0\n");
+            break;
+        default:
+            break;
+        }
+    }
+    finished_operations_.clear();
+}
+#endif
 
 #ifdef __FAAS_OP_TRACING
 
