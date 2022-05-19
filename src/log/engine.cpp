@@ -1209,13 +1209,13 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                 PrintOpLatencies(&append_latencies, &read_latencies);
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/boki/stats/latencies-append-{}", my_node_id()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}", my_node_id()), std::fstream::app);
                     latency_file << append_latencies.str();
                     latency_file.close();
                 }
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/boki/stats/latencies-read-{}", my_node_id()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}", my_node_id()), std::fstream::app);
                     latency_file << read_latencies.str();
                     latency_file.close();
                 }
@@ -1301,7 +1301,7 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                     suffix_chain_size + seqnum_cache_size + tag_cache_size,
                     complete_index_num_seqnums, complete_index_num_tags, complete_index_num_seqnums_of_tags, complete_index_size 
                 );
-                std::ofstream st_file(fmt::format("/tmp/boki/stats/engine-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
+                std::ofstream st_file(fmt::format("/tmp/slog/stats/engine-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
                 st_file << statistics;
                 st_file.close();
 #endif
@@ -1321,13 +1321,13 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                 finished_traces_.clear();
                 {
                     std::ofstream trace_file;
-                    trace_file.open(fmt::format("/tmp/boki/stats/traces-append-{}", my_node_id()), std::fstream::app);
+                    trace_file.open(fmt::format("/tmp/slog/stats/traces-append-{}", my_node_id()), std::fstream::app);
                     trace_file << append_results.str();
                     trace_file.close();
                 }
                 {
                     std::ofstream trace_file;
-                    trace_file.open(fmt::format("/tmp/boki/stats/traces-read-{}", my_node_id()), std::fstream::app);
+                    trace_file.open(fmt::format("/tmp/slog/stats/traces-read-{}", my_node_id()), std::fstream::app);
                     trace_file << read_results.str();
                     trace_file.close();
                 }
