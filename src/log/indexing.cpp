@@ -149,7 +149,7 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     if (index_ptr != nullptr) {
         IndexQuery query = BuildIndexQuery(request, request.origin_node_id);
         HVLOG_F(1, "IndexRead: Make query. client_id={}, metalog={}, logspace={}, tag={}, query_seqnum={}", 
-            request.client_data, bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, query.query_seqnum
+            request.client_data, bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, bits::HexStr0x(query.query_seqnum)
         );
         Index::QueryResultVec query_results;
         {
@@ -273,7 +273,7 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
     bool isMyResult = index_node_id_other == my_node_id();
     HVLOG_F(1, "IndexRead: Index result received. is_my_result={}, index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
         isMyResult, index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
-        index_query_result_other.original_query.query_seqnum
+        bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
     );
     DCHECK_NE(index_query_result_other.state, IndexQueryResult::kContinue); //"kContinue cannot be merged"
     absl::MutexLock view_lk(&view_mu_);
@@ -317,7 +317,7 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
             if (mergedResult < slaveResult) {
                 // other result is closer
                 HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_prev and query_seqnum={}", 
-                    mergedResult, slaveResult, op->index_query_result.original_query.query_seqnum
+                    mergedResult, slaveResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
                 );
                 op->index_query_result = index_query_result_other;
             }
@@ -326,7 +326,7 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
             if (slaveResult < mergedResult) {
                 // other result is closer
                 HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_next and query_seqnum={}", 
-                    mergedResult, slaveResult, op->index_query_result.original_query.query_seqnum
+                    mergedResult, slaveResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
                 );
                 op->index_query_result = index_query_result_other;
             }
@@ -356,14 +356,14 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
     IndexQueryResult merged_index_query_result;
     bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
     if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
-        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", merged_index_query_result.original_query.query_seqnum);
+        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
         ForwardReadRequest(merged_index_query_result);
     } else if (merge_complete && !merged_index_query_result.IsFound()){
         HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
             merged_index_query_result.original_query.DirectionToString(), 
             merged_index_query_result.original_query.user_logspace, 
             merged_index_query_result.original_query.user_tag, 
-            merged_index_query_result.original_query.query_seqnum
+            bits::HexStr0x(merged_index_query_result.original_query.query_seqnum)
         );
         SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
     }
@@ -376,7 +376,7 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
 
 void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     if (my_query_result.IsPointHit()){
-        HVLOG_F(1, "IndexRead: Point hit. Forward read request for query_seqnum={}", my_query_result.original_query.query_seqnum);
+        HVLOG_F(1, "IndexRead: Point hit. Forward read request for query_seqnum={}", bits::HexStr0x(my_query_result.original_query.query_seqnum));
         ForwardReadRequest(my_query_result);
     }
     if (IsSlave(my_query_result.original_query)){
@@ -387,14 +387,14 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     IndexQueryResult merged_index_query_result;
     bool merge_complete = MergeIndexResult(my_node_id(), my_query_result, &merged_index_query_result);
     if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()) {
-        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", merged_index_query_result.original_query.query_seqnum);
+        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
         ForwardReadRequest(merged_index_query_result);
     } else if (merge_complete && !merged_index_query_result.IsFound()){
         HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
             merged_index_query_result.original_query.DirectionToString(), 
             merged_index_query_result.original_query.user_logspace, 
             merged_index_query_result.original_query.user_tag, 
-            merged_index_query_result.original_query.query_seqnum
+            bits::HexStr0x(merged_index_query_result.original_query.query_seqnum)
         );
         SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
     }
@@ -489,7 +489,7 @@ void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     if (!success) {
         uint64_t seqnum = query_result.found_result.seqnum;
         IndexQuery query = query_result.original_query;
-        HLOG_F(WARNING, "IndexRead: Failed to send read request for seqnum {} ", seqnum);
+        HLOG_F(WARNING, "IndexRead: Failed to send read request for seqnum {} ", bits::HexStr0x(seqnum));
         SendIndexReadFailureResponse(query, protocol::SharedLogResultType::DATA_LOST);
     }
 }

@@ -632,7 +632,7 @@ void Index::ProcessQuery(const IndexQuery& query) {
 void Index::ProcessReadNext(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNext);
     HVLOG_F(1, "IndexRead: ProcessReadNext: query_seqnum={}, logspace={}, tag={}",
-            query.query_seqnum, query.user_logspace, query.user_tag);
+            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id > view_->id()) {
         pending_query_results_.push_back(BuildNotFoundResult(query));
@@ -646,14 +646,14 @@ void Index::ProcessReadNext(const IndexQuery& query) {
         if (found) {
             pending_query_results_.push_back(
                 BuildFoundResult(query, view_->id(), seqnum, engine_id));
-            HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult: query_seqnum={}, seqnum={}", query.query_seqnum, seqnum);
+            HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult: query_seqnum={}, seqnum={}", bits::HexStr0x(query.query_seqnum), bits::HexStr0x(seqnum));
         } else {
             if (query.prev_found_result.seqnum != kInvalidLogSeqNum) {
                 const IndexFoundResult& found_result = query.prev_found_result;
                 pending_query_results_.push_back(
                     BuildFoundResult(query, found_result.view_id,
                                      found_result.seqnum, found_result.storage_shard_id));
-                HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult (from prev_result): query_seqnum={}, seqnum={}", query.query_seqnum, found_result.seqnum);
+                HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult (from prev_result): query_seqnum={}, seqnum={}", bits::HexStr0x(query.query_seqnum), bits::HexStr0x(found_result.seqnum));
             } else {
                 pending_query_results_.push_back(BuildNotFoundResult(query));
                 HVLOG(1) << "IndexRead: ProcessReadNext: NotFoundResult";
@@ -669,7 +669,7 @@ void Index::ProcessReadNext(const IndexQuery& query) {
 void Index::ProcessReadPrev(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadPrev);
     HVLOG_F(1, "IndexRead: ProcessReadPrev: query_seqnum={}, logspace={}, tag={}",
-            query.query_seqnum, query.user_logspace, query.user_tag);
+            bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id < view_->id()) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
@@ -682,7 +682,7 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
     if (found) {
         pending_query_results_.push_back(
             BuildFoundResult(query, view_->id(), seqnum, engine_id));
-        HVLOG_F(1, "IndexRead: ProcessReadPrev: FoundResult: query_seqnum={}, seqnum={}", query.query_seqnum, seqnum);
+        HVLOG_F(1, "IndexRead: ProcessReadPrev: FoundResult: query_seqnum={}, seqnum={}", bits::HexStr0x(query.query_seqnum), bits::HexStr0x(seqnum));
     } else if (view_->id() > 0) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
         HVLOG(1) << "IndexRead: ProcessReadPrev: ContinueResult";
@@ -737,7 +737,7 @@ bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* e
 IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                          uint64_t seqnum, uint16_t storage_shard_id) {
     if (query.min_seqnum_query && (query.tail_seqnum == 0 || query.tail_seqnum < seqnum)){
-        HVLOG_F(1, "Min query: seqnum result higher {} than tail {} of requester", seqnum, query.tail_seqnum);
+        HVLOG_F(1, "Min query: seqnum result higher {} than tail {} of requester", bits::HexStr0x(seqnum), bits::HexStr0x(query.tail_seqnum));
         return IndexQueryResult {
             .state = IndexQueryResult::kFound,
             .metalog_progress = query.initial ? index_metalog_progress()
