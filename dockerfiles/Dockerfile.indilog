@@ -1,0 +1,21 @@
+FROM maxwie/deps:latest as builder
+
+WORKDIR /slog
+RUN rm -rf ./src
+
+COPY Makefile config.mk ./
+COPY ./src ./src
+
+RUN CXX=clang++ make -j $(nproc)
+
+FROM ubuntu:focal as release
+
+COPY --from=builder /slog/bin/release/launcher   /slog/launcher
+COPY --from=builder /slog/bin/release/gateway    /slog/gateway
+COPY --from=builder /slog/bin/release/engine     /slog/engine
+COPY --from=builder /slog/bin/release/sequencer  /slog/sequencer
+COPY --from=builder /slog/bin/release/storage    /slog/storage
+COPY --from=builder /slog/bin/release/controller /slog/controller
+COPY --from=builder /slog/bin/release/index      /slog/index
+
+WORKDIR /slog

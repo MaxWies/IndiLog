@@ -1,3 +1,0 @@
-FROM maxwie/boki:latest 
-
-COPY . /src/boki
