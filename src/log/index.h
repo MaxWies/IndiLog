@@ -49,6 +49,8 @@ public:
 
     void ProvideIndexData(const IndexDataProto& index_data);
 
+    void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
+
     void MakeQuery(const IndexQuery& query);
 
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;

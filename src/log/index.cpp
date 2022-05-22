@@ -54,6 +54,8 @@ public:
     bool FindNext(uint64_t query_seqnum, uint64_t user_tag,
                   uint64_t* seqnum, uint16_t* engine_id) const;
 
+    void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
+
 private:
     uint32_t logspace_id_;
     uint32_t user_logspace_;
@@ -84,6 +86,23 @@ void Index::PerSpaceIndex::Add(uint32_t seqnum_lowhalf, uint16_t engine_id,
         DCHECK_NE(user_tag, kEmptyLogTag);
         seqnums_by_tag_[user_tag].push_back(seqnum_lowhalf);
     }
+}
+
+void Index::PerSpaceIndex::Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size){
+    *num_seqnums += seqnums_.size();
+    *num_tags += seqnums_by_tag_.size();
+    size_t local_num_seqnums_of_tags = 0;
+    for (auto& [tag, seqnums] : seqnums_by_tag_){
+        local_num_seqnums_of_tags += seqnums.size();
+    }
+    *num_seqnums_of_tags += local_num_seqnums_of_tags;
+    *size += (
+        sizeof(uint32_t) * engine_ids_.size()           // seqnum keys for engine_ids
+        + sizeof(uint16_t) * engine_ids_.size()         // engine_ids
+        + sizeof(uint32_t) * seqnums_.size()            // seqnums
+        + sizeof(uint64_t) * seqnums_by_tag_.size()     // tags
+        + sizeof(uint32_t) * local_num_seqnums_of_tags  // seqnums of tags
+    );
 }
 
 bool Index::PerSpaceIndex::FindPrev(uint64_t query_seqnum, uint64_t user_tag,
@@ -340,6 +359,15 @@ Index::PerSpaceIndex* Index::GetOrCreateIndex(uint32_t user_logspace) {
     PerSpaceIndex* index = new PerSpaceIndex(identifier(), user_logspace);
     index_[user_logspace].reset(index);
     return index;
+}
+
+void Index::Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size) {
+    for (auto& [user_logspace, index] : index_){
+        index->Aggregate(num_seqnums, num_tags, num_seqnums_of_tags, size);
+        *size += (
+            sizeof(uint32_t) * 1 // key
+        );
+    }
 }
 
 void Index::ProcessQuery(const IndexQuery& query) {
