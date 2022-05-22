@@ -16,6 +16,7 @@ ABSL_DECLARE_FLAG(bool, slog_engine_enable_cache);
 ABSL_DECLARE_FLAG(int, slog_engine_cache_cap_mb);
 ABSL_DECLARE_FLAG(bool, slog_engine_propagate_auxdata);
 ABSL_DECLARE_FLAG(bool, slog_engine_cache_taint_hit);
+ABSL_DECLARE_FLAG(int, slog_engine_stat_thread_interval);
 
 ABSL_DECLARE_FLAG(int, slog_storage_cache_cap_mb);
 ABSL_DECLARE_FLAG(std::string, slog_storage_backend);

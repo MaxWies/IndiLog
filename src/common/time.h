@@ -13,6 +13,10 @@ inline int64_t TimeSpecToMicro(struct timespec* tp) {
     return ret;
 }
 
+inline int64_t TimeSpecToSecond(struct timespec* tp) {
+    return int64_t{tp->tv_sec};
+}
+
 inline int64_t GetMonotonicMicroTimestamp() {
     struct timespec tp;
     PCHECK(clock_gettime(CLOCK_MONOTONIC, &tp) == 0) << "clock_gettime failed";
@@ -23,6 +27,12 @@ inline int64_t GetRealtimeMicroTimestamp() {
     struct timespec tp;
     PCHECK(clock_gettime(CLOCK_REALTIME, &tp) == 0) << "clock_gettime failed";
     return TimeSpecToMicro(&tp);
+}
+
+inline int64_t GetRealtimeSecondTimestamp() {
+    struct timespec tp;
+    PCHECK(clock_gettime(CLOCK_REALTIME, &tp) == 0) << "clock_gettime failed";
+    return TimeSpecToSecond(&tp);
 }
 
 inline int64_t TimeSpecToNano(struct timespec* tp) {

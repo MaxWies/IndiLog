@@ -5,6 +5,6 @@ RUN apt update && \
     apt upgrade -y && \
     apt install -y g++ clang make cmake pkg-config autoconf automake libtool curl unzip
 
-WORKDIR /boki
+WORKDIR /slog
 COPY . .
 RUN CC=clang CXX=clang++ ./build_deps.sh

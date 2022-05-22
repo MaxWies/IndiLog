@@ -1,5 +1,12 @@
 #include "log/engine.h"
 
+#ifdef __FAAS_STAT_THREAD
+#include <iostream>
+#include <fstream>
+#include "utils/timerfd.h"
+#include "utils/io.h"
+#endif
+
 #include "engine/engine.h"
 #include "log/flags.h"
 #include "utils/bits.h"
@@ -19,7 +26,13 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false) 
+#ifdef __FAAS_STAT_THREAD
+      ,
+      statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
+      statistics_thread_started_(false)
+#endif
+      {}
 
 Engine::~Engine() {}
 
@@ -56,6 +69,13 @@ void Engine::OnViewCreated(const View* view) {
         }
         views_.push_back(view);
         log_header_ = fmt::format("LogEngine[{}-{}]: ", my_node_id(), view->id());
+#ifdef __FAAS_STAT_THREAD
+        // todo: use zookeeper sync
+        if (!statistics_thread_started_){
+            statistics_thread_.Start();
+            statistics_thread_started_ = true;   
+        }   
+#endif 
     }
     if (!ready_requests.empty()) {
         HLOG_F(INFO, "{} requests for the new view", ready_requests.size());
@@ -674,6 +694,87 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
     query.prev_found_result = result.found_result;
     return query;
 }
+
+#ifdef __FAAS_STAT_THREAD
+    void Engine::StatisticsThreadMain() {
+        int timerfd = io_utils::CreateTimerFd();
+        CHECK(timerfd != -1) << "Failed to create timerfd";
+        io_utils::FdUnsetNonblocking(timerfd);
+        absl::Duration interval = absl::Seconds(absl::GetFlag(FLAGS_slog_engine_stat_thread_interval));
+        CHECK(io_utils::SetupTimerFdPeriodic(timerfd, interval, interval))
+            << "Failed to setup timerfd with interval " << interval;
+        bool running = true;
+        while (running) {
+            uint64_t exp;
+            ssize_t nread = read(timerfd, &exp, sizeof(uint64_t));
+            if (nread < 0) {
+                PLOG(FATAL) << "Failed to read on timerfd";
+            }
+            CHECK_EQ(gsl::narrow_cast<size_t>(nread), sizeof(uint64_t));
+            uint64_t local_op_id = LoadLocalOpId();
+            if (previous_local_op_id_ != local_op_id){
+#ifdef __FAAS_INDEX_MEMORY
+        size_t index_num_seqnums = 0;
+        size_t index_num_tags = 0;
+        size_t index_num_seqnums_of_tags = 0;
+        size_t index_size = 0;
+        {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            index_collection_.ForEachActiveLogSpace(
+                [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                    auto ptr = index_ptr.Lock();
+                    ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
+                }
+            );
+            index_collection_.ForEachFinalizedLogSpace(
+                [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                    auto ptr = index_ptr.Lock();
+                    ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
+                }
+            );
+        }
+        std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
+        ix_memory_file
+            << std::to_string(index_size) << "," 
+            << std::to_string(index_num_seqnums) << "," 
+            << std::to_string(index_num_tags) << "," 
+            << std::to_string(index_num_seqnums_of_tags) << "\n";
+        ix_memory_file.close();
+#endif
+#ifdef __FAAS_OP_LATENCY
+                std::ostringstream append_latencies;
+                std::ostringstream read_latencies;
+                PrintOpLatencies(&append_latencies, &read_latencies);
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}.csv", my_node_id()), std::fstream::app);
+                    latency_file << append_latencies.str();
+                    latency_file.close();
+                }
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}.csv", my_node_id()), std::fstream::app);
+                    latency_file << read_latencies.str();
+                    latency_file.close();
+                }
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file << append_latencies.str();
+                    latency_file.close();
+                }
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file << read_latencies.str();
+                    latency_file.close();
+                }
+#endif
+                previous_local_op_id_ = local_op_id;
+            }
+        }
+    }      
+#endif
 
 }  // namespace log
 }  // namespace faas

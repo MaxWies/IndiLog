@@ -83,7 +83,7 @@ protected:
                           std::span<const char> aux_data);
 
     void FinishLocalOpWithResponse(LocalOp* op, protocol::Message* response,
-                                   uint64_t metalog_progress);
+                                   uint64_t metalog_progress, bool success = true);
     void FinishLocalOpWithFailure(LocalOp* op, protocol::SharedLogResultType result,
                                   uint64_t metalog_progress = 0);
 
@@ -110,6 +110,24 @@ protected:
                               std::span<const char> payload = EMPTY_CHAR_SPAN);
 
     server::IOWorker* SomeIOWorker();
+
+#ifdef __FAAS_STAT_THREAD
+    uint64_t previous_local_op_id_;
+    uint64_t LoadLocalOpId(){
+        return next_local_op_id_.load();
+    }
+#endif
+
+#ifdef __FAAS_OP_LATENCY
+struct OpLatency{
+    protocol::SharedLogOpType type;
+    int64_t duration;
+    bool success;
+};
+    std::vector<OpLatency> finished_operations_ ABSL_GUARDED_BY(fn_ctx_mu_);
+
+    void PrintOpLatencies(std::ostringstream* append_results, std::ostringstream* read_results);
+#endif
 
 private:
     const uint16_t node_id_;

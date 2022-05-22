@@ -32,6 +32,12 @@ private:
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_reads_;
 
+#ifdef __FAAS_STAT_THREAD
+    base::Thread statistics_thread_;
+    bool statistics_thread_started_;
+    uint64_t previous_total_ops_counter_;
+#endif
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
@@ -74,6 +80,10 @@ private:
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
+
+#ifdef __FAAS_STAT_THREAD
+    void StatisticsThreadMain();        
+#endif
 
     DISALLOW_COPY_AND_ASSIGN(Engine);
 };
