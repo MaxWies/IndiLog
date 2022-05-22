@@ -20,6 +20,7 @@ ABSL_DECLARE_FLAG(bool, slog_engine_index_tier_only);
 ABSL_DECLARE_FLAG(bool, slog_engine_distributed_indexing);
 ABSL_DECLARE_FLAG(int, slog_engine_seqnum_suffix_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_tag_cache_cap);
+ABSL_DECLARE_FLAG(int, slog_engine_stat_thread_interval);
 
 ABSL_DECLARE_FLAG(int, slog_storage_cache_cap_mb);
 ABSL_DECLARE_FLAG(std::string, slog_storage_backend);

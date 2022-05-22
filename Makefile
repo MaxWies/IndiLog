@@ -44,8 +44,9 @@ BUILD_BENCH = 0
 FORCE_DCHECK = 0
 ENABLE_STAT_THREAD = 0
 ENABLE_OP_LATENCY = 0
-ENABLE_ENGINE_STATISTICS = 0
+ENABLE_OP_STAT = 0
 ENABLE_OP_TRACING = 0
+ENABLE_INDEX_MEMORY = 0
 
 ifneq ("$(wildcard config.mk)","")
 include config.mk
@@ -71,12 +72,16 @@ ifeq ($(ENABLE_OP_LATENCY),1)
 COMPILE_FLAGS += -D__FAAS_OP_LATENCY
 endif
 
-ifeq ($(ENABLE_ENGINE_STATISTICS),1)
-COMPILE_FLAGS += -D__FAAS_ENGINE_STATISTICS
+ifeq ($(ENABLE_OP_STAT),1)
+COMPILE_FLAGS += -D__FAAS_OP_STAT
 endif
 
 ifeq ($(ENABLE_OP_TRACING),1)
 COMPILE_FLAGS += -D__FAAS_OP_TRACING
+endif
+
+ifeq ($(ENABLE_INDEX_MEMORY),1)
+COMPILE_FLAGS += -D__FAAS_INDEX_MEMORY
 endif
 
 # Function used to check variables. Use on the command line:

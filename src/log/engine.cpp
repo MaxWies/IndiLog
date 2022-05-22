@@ -42,7 +42,7 @@ Engine::Engine(engine::Engine* engine)
       statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
       statistics_thread_started_(false)
 #endif
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
       ,
       append_ops_counter_(0),
       read_ops_counter_(0),
@@ -112,8 +112,8 @@ void Engine::OnViewCreated(const View* view) {
             // clean zk
             zk_utils::DeleteSync(zk_session(), znode_path_shard_resp);
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterMessage(
-                view->id(), 
-                sequencer_id, 
+                view->id(),
+                sequencer_id,
                 shard_id,
                 my_node_id()
             );
@@ -127,7 +127,7 @@ void Engine::OnViewCreated(const View* view) {
         if (!statistics_thread_started_){
             statistics_thread_.Start();
             statistics_thread_started_ = true;   
-        }   
+        }
 #endif 
     }
 }
@@ -312,7 +312,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
 #endif
         }
     }
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
     append_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif
     if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED || op->user_tags.empty() || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
@@ -367,7 +367,7 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
     local_index_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
 #ifdef __FAAS_OP_TRACING
@@ -388,7 +388,7 @@ void Engine::HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t vi
         HLOG_F(WARNING, "Failed to send index tier request for min seqnum of tag {}", tag);
         return;
     }
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
     index_min_read_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
     HVLOG_F(1, "Sent request to index tier for min seqnum of tag {} successfully", tag);
@@ -431,7 +431,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
     }
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
     read_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
     if (indexing_strategy_ == IndexingStrategy::INDEX_TIER_ONLY){
@@ -918,7 +918,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
         // Cache hits
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
         log_cache_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
         const LogEntry& log_entry = cached_log_entry.value();
@@ -959,7 +959,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
     } else {
         // Cache miss
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
         log_cache_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
         const View::StorageShard* storage_shard = nullptr;
@@ -1031,7 +1031,7 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
         const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
         local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
             ProcessIndexFoundResult(result);
@@ -1190,7 +1190,7 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
         int timerfd = io_utils::CreateTimerFd();
         CHECK(timerfd != -1) << "Failed to create timerfd";
         io_utils::FdUnsetNonblocking(timerfd);
-        absl::Duration interval = absl::Seconds(10);
+        absl::Duration interval = absl::Seconds(absl::GetFlag(FLAGS_slog_engine_stat_thread_interval));
         CHECK(io_utils::SetupTimerFdPeriodic(timerfd, absl::Seconds(10), interval))
             << "Failed to setup timerfd with interval " << interval;
         bool running = true;
@@ -1219,8 +1219,20 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                     latency_file << read_latencies.str();
                     latency_file.close();
                 }
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file << append_latencies.str();
+                    latency_file.close();
+                }
+                {
+                    std::ofstream latency_file;
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file << read_latencies.str();
+                    latency_file.close();
+                }
 #endif
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
                 size_t suffix_chain_links = 0;
                 size_t suffix_chain_num_ranges = 0;
                 size_t suffix_chain_size = 0;
@@ -1331,6 +1343,65 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                     trace_file << read_results.str();
                     trace_file.close();
                 }
+#endif
+#ifdef __FAAS_INDEX_MEMORY
+                size_t suffix_chain_links = 0;
+                size_t suffix_chain_num_ranges = 0;
+                size_t suffix_chain_size = 0;
+                size_t seqnum_cache_num_seqnums = 0;
+                size_t seqnum_cache_size = 0;
+                size_t tag_cache_num_tags = 0;
+                size_t tag_cache_seqnums = 0;
+                size_t tag_cache_size = 0;
+                size_t complete_index_num_seqnums = 0;
+                size_t complete_index_num_tags = 0;
+                size_t complete_index_num_seqnums_of_tags = 0;
+                size_t complete_index_size = 0;
+                {
+                    absl::ReaderMutexLock view_lk(&view_mu_);
+                    suffix_chain_collection_.ForEachLogSpace(
+                        [&] (uint32_t id, LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
+                            auto ptr = suffix_chain_ptr.Lock();
+                            ptr->Aggregate(&suffix_chain_links, &suffix_chain_num_ranges, &suffix_chain_size);
+                        }
+                    );
+                    if(seqnum_cache_.has_value()){
+                        seqnum_cache_->Aggregate(&seqnum_cache_num_seqnums, &seqnum_cache_size);
+                    }
+                    tag_cache_collection_.ForEachLogSpace(
+                        [&] (uint32_t id, LockablePtr<TagCache> tag_cache_ptr) {
+                            auto ptr = tag_cache_ptr.Lock();
+                            ptr->Aggregate(&tag_cache_num_tags, &tag_cache_seqnums, &tag_cache_size);
+                        }
+                    );
+                    index_collection_.ForEachActiveLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
+                        }
+                    );
+                    index_collection_.ForEachFinalizedLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
+                        }
+                    );
+                }
+                std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
+                ix_memory_file
+                    << std::to_string(suffix_chain_size + seqnum_cache_size + tag_cache_size + complete_index_size) << ","
+                    << std::to_string(complete_index_size) << "," 
+                    << std::to_string(complete_index_num_seqnums) << "," 
+                    << std::to_string(complete_index_num_tags) << "," 
+                    << std::to_string(suffix_chain_size) << ","
+                    << std::to_string(suffix_chain_links) << ","
+                    << std::to_string(suffix_chain_num_ranges) << ","
+                    << std::to_string(seqnum_cache_size) << ","
+                    << std::to_string(seqnum_cache_num_seqnums) << ","
+                    << std::to_string(tag_cache_size) << ","
+                    << std::to_string(tag_cache_num_tags) << ","
+                    << std::to_string(tag_cache_seqnums) << ",";
+                ix_memory_file.close();
 #endif
                 previous_local_op_id_ = local_op_id;
             }

@@ -6,6 +6,16 @@
 
 namespace faas {
 
+inline int64_t TimeSpecToSecond(struct timespec* tp) {
+    return int64_t{tp->tv_sec};
+}
+
+inline int64_t GetRealtimeSecondTimestamp() {
+    struct timespec tp;
+    PCHECK(clock_gettime(CLOCK_REALTIME, &tp) == 0) << "clock_gettime failed";
+    return TimeSpecToSecond(&tp);
+}
+
 inline int64_t TimeSpecToMicro(struct timespec* tp) {
     int64_t ret = 0;
     ret += int64_t{tp->tv_sec} * 1000000;

@@ -54,7 +54,7 @@ private:
     uint64_t previous_total_ops_counter_;
 #endif
 
-#ifdef __FAAS_ENGINE_STATISTICS
+#ifdef __FAAS_OP_STAT
     std::atomic<uint64_t> append_ops_counter_;
     std::atomic<uint64_t> read_ops_counter_;
     std::atomic<uint64_t> local_index_hit_counter_;
