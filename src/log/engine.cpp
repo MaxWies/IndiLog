@@ -714,32 +714,32 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
             uint64_t local_op_id = LoadLocalOpId();
             if (previous_local_op_id_ != local_op_id){
 #ifdef __FAAS_INDEX_MEMORY
-        size_t index_num_seqnums = 0;
-        size_t index_num_tags = 0;
-        size_t index_num_seqnums_of_tags = 0;
-        size_t index_size = 0;
-        {
-            absl::ReaderMutexLock view_lk(&view_mu_);
-            index_collection_.ForEachActiveLogSpace(
-                [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
-                    auto ptr = index_ptr.Lock();
-                    ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
+                size_t index_num_seqnums = 0;
+                size_t index_num_tags = 0;
+                size_t index_num_seqnums_of_tags = 0;
+                size_t index_size = 0;
+                {
+                    absl::ReaderMutexLock view_lk(&view_mu_);
+                    index_collection_.ForEachActiveLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
+                        }
+                    );
+                    index_collection_.ForEachFinalizedLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                            auto ptr = index_ptr.Lock();
+                            ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
+                        }
+                    );
                 }
-            );
-            index_collection_.ForEachFinalizedLogSpace(
-                [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
-                    auto ptr = index_ptr.Lock();
-                    ptr->Aggregate(&index_num_seqnums, &index_num_tags, &index_num_seqnums_of_tags, &index_size);
-                }
-            );
-        }
-        std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
-        ix_memory_file
-            << std::to_string(index_size) << "," 
-            << std::to_string(index_num_seqnums) << "," 
-            << std::to_string(index_num_tags) << "," 
-            << std::to_string(index_num_seqnums_of_tags) << "\n";
-        ix_memory_file.close();
+                std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
+                ix_memory_file
+                    << std::to_string(index_size) << "," 
+                    << std::to_string(index_num_seqnums) << "," 
+                    << std::to_string(index_num_tags) << "," 
+                    << std::to_string(index_num_seqnums_of_tags) << "\n";
+                ix_memory_file.close();
 #endif
 #ifdef __FAAS_OP_LATENCY
                 std::ostringstream append_latencies;
