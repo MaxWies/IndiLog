@@ -307,8 +307,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
-            locked_producer->LocalAppend(op, &log_metadata.localid);
-            next_seqnum = locked_producer->seqnum_position();
+            locked_producer->LocalAppend(op, &log_metadata.localid, &next_seqnum);
 #ifdef __FAAS_OP_TRACING
             SaveTracePoint(op->id, "AfterPutToPendingList");
 #endif
@@ -574,7 +573,6 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
         IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
-        uint32_t metalog_position_producer = 0;
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
@@ -587,7 +585,6 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
             for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                 locked_producer->ProvideMetaLog(metalog_proto);
             }
-            metalog_position_producer = locked_producer->metalog_position();
             locked_producer->PollAppendResults(&append_results);
         }
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED){

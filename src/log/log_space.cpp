@@ -202,11 +202,12 @@ LogProducer::LogProducer(uint16_t storage_shard_id, const View* view, uint16_t s
 
 LogProducer::~LogProducer() {}
 
-void LogProducer::LocalAppend(void* caller_data, uint64_t* localid) {
+void LogProducer::LocalAppend(void* caller_data, uint64_t* localid, uint64_t* next_seqnum) {
     DCHECK(!pending_appends_.contains(next_localid_));
     HVLOG_F(1, "LocalAppend with localid {}", bits::HexStr0x(next_localid_));
     pending_appends_[next_localid_] = caller_data;
     *localid = next_localid_++;
+    *next_seqnum = seqnum_position();
 }
 
 void LogProducer::PollAppendResults(AppendResultVec* results) {

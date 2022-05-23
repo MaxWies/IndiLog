@@ -60,7 +60,7 @@ public:
     LogProducer(uint16_t engine_id, const View* view, uint16_t sequencer_id, uint32_t next_start_id);
     ~LogProducer();
 
-    void LocalAppend(void* caller_data, uint64_t* localid);
+    void LocalAppend(void* caller_data, uint64_t* localid, uint64_t* next_seqnum);
 
     struct AppendResult {
         uint64_t seqnum;   // seqnum == kInvalidLogSeqNum indicates failure
