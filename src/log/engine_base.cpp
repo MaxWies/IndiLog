@@ -60,6 +60,12 @@ void EngineBase::SetupZKWatchers() {
         }
     );
     view_watcher_.StartWatching(zk_session());
+#ifdef __FAAS_STAT_THREAD
+    stat_watcher_.emplace(zk_session(), "stat");
+    stat_watcher_->SetNodeCreatedCallback(
+        absl::bind_front(&EngineBase::OnStatZNodeCreated, this));
+    stat_watcher_->Start();
+#endif
 }
 
 void EngineBase::SetupTimers() {
@@ -393,6 +399,19 @@ bool EngineBase::SendSequencerMessage(uint16_t sequencer_id,
 server::IOWorker* EngineBase::SomeIOWorker() {
     return engine_->SomeIOWorker();
 }
+
+#ifdef __FAAS_STAT_THREAD
+void EngineBase::OnStatZNodeCreated(std::string_view path,
+                                   std::span<const char> contents) {
+    if (path == "start") {
+        HLOG(INFO) << "Received statistics thread activation command";
+        OnActivateStatisticsThread();
+    } else {
+        HLOG(ERROR) << "Unknown command: " << path;
+    }
+    zk_session()->Delete(fmt::format("stat/{}", path), nullptr);
+}
+#endif
 
 #ifdef __FAAS_OP_LATENCY
 void EngineBase::PrintOpLatencies(std::ostringstream* append_results, std::ostringstream* read_results){

@@ -36,6 +36,8 @@ private:
     base::Thread statistics_thread_;
     bool statistics_thread_started_;
     uint64_t previous_total_ops_counter_;
+    void OnActivateStatisticsThread() override;
+    void StatisticsThreadMain();
 #endif
 
     void OnViewCreated(const View* view) override;
@@ -80,10 +82,6 @@ private:
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
-
-#ifdef __FAAS_STAT_THREAD
-    void StatisticsThreadMain();        
-#endif
 
     DISALLOW_COPY_AND_ASSIGN(Engine);
 };
