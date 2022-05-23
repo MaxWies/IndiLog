@@ -114,10 +114,13 @@ protected:
     server::IOWorker* SomeIOWorker();
 
 #ifdef __FAAS_STAT_THREAD
+    std::optional<zk_utils::DirWatcher> statistics_watcher_;
     uint64_t previous_local_op_id_;
     uint64_t LoadLocalOpId(){
         return next_local_op_id_.load();
     }
+    void OnStatZNodeCreated(std::string_view path, std::span<const char> contents);
+    virtual void OnActivateStatisticsThread() = 0;
 #endif
 
 #ifdef __FAAS_OP_LATENCY
@@ -127,7 +130,10 @@ struct OpLatency{
     bool success;
 };
     std::vector<OpLatency> finished_operations_ ABSL_GUARDED_BY(fn_ctx_mu_);
-
+    void ResetOpLatencies(){
+        absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+        finished_operations_.clear();
+    }
     void PrintOpLatencies(std::ostringstream* append_results, std::ostringstream* read_results);
 #endif
 #ifdef __FAAS_OP_TRACING

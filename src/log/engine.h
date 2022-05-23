@@ -52,6 +52,8 @@ private:
     base::Thread statistics_thread_;
     bool statistics_thread_started_;
     uint64_t previous_total_ops_counter_;
+    void OnActivateStatisticsThread() override;
+    void StatisticsThreadMain();
 #endif
 
 #ifdef __FAAS_OP_STAT
@@ -62,6 +64,15 @@ private:
     std::atomic<uint64_t> index_min_read_ops_counter_;
     std::atomic<uint64_t> log_cache_hit_counter_;
     std::atomic<uint64_t> log_cache_miss_counter_;
+    void ResetOpStat(){
+        append_ops_counter_.store(0);
+        read_ops_counter_.store(0);
+        local_index_hit_counter_.store(0);
+        local_index_miss_counter_.store(0);
+        index_min_read_ops_counter_.store(0);
+        log_cache_hit_counter_.store(0);
+        log_cache_miss_counter_.store(0);
+    }
 #endif
 
     void OnViewCreated(const View* view) override;
@@ -87,6 +98,7 @@ private:
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
     void ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* not_found_results);
+    void ProcessIndexQueryResultsComplete(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
@@ -113,10 +125,6 @@ private:
     IndexQuery BuildIndexTierQuery(LocalOp* op, uint16_t master_node_id);
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
-
-#ifdef __FAAS_STAT_THREAD
-    void StatisticsThreadMain();        
-#endif
 
     DISALLOW_COPY_AND_ASSIGN(Engine);
 };
