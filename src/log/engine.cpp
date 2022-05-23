@@ -1238,37 +1238,38 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
             CHECK_EQ(gsl::narrow_cast<size_t>(nread), sizeof(uint64_t));
             uint64_t local_op_id = LoadLocalOpId();
             if (previous_local_op_id_ != local_op_id){
+                int64_t now_ts = GetRealtimeSecondTimestamp();
 #ifdef __FAAS_OP_LATENCY
                 std::ostringstream append_latencies;
                 std::ostringstream read_latencies;
                 PrintOpLatencies(&append_latencies, &read_latencies);
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}.csv", my_node_id()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-all.csv", my_node_id()), std::fstream::app);
                     latency_file << append_latencies.str();
                     latency_file.close();
                 }
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}.csv", my_node_id()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-all.csv", my_node_id()), std::fstream::app);
                     latency_file << read_latencies.str();
                     latency_file.close();
                 }
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), now_ts), std::fstream::app);
                     latency_file << append_latencies.str();
                     latency_file.close();
                 }
                 {
                     std::ofstream latency_file;
-                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                    latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), now_ts), std::fstream::app);
                     latency_file << read_latencies.str();
                     latency_file.close();
                 }
 #endif
 #ifdef __FAAS_OP_STAT
-                std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}", my_node_id(), GetMonotonicMicroTimestamp()));
+                std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}", my_node_id(), now_ts));
                 op_st_file
                     << std::to_string(append_ops_counter_.load())           << ","
                     << std::to_string(read_ops_counter_.load())             << "," 
@@ -1354,7 +1355,7 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
                         );
                     }
                 }
-                std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
+                std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), now_ts));
                 ix_memory_file
                     << std::to_string(suffix_chain_size + seqnum_cache_size + tag_cache_size + complete_index_size) << ","
                     << std::to_string(complete_index_size) << "," 
