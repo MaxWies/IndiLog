@@ -757,13 +757,13 @@ void Engine::StatisticsThreadMain() {
             PrintOpLatencies(&append_latencies, &read_latencies);
             {
                 std::ofstream latency_file;
-                latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}.csv", my_node_id()), std::fstream::app);
+                latency_file.open(fmt::format("/tmp/slog/stats/all-latencies-append-{}.csv", my_node_id()), std::fstream::app);
                 latency_file << append_latencies.str();
                 latency_file.close();
             }
             {
                 std::ofstream latency_file;
-                latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}.csv", my_node_id()), std::fstream::app);
+                latency_file.open(fmt::format("/tmp/slog/stats/all-latencies-read-{}.csv", my_node_id()), std::fstream::app);
                 latency_file << read_latencies.str();
                 latency_file.close();
             }
