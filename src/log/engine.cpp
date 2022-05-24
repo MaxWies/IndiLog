@@ -69,13 +69,6 @@ void Engine::OnViewCreated(const View* view) {
         }
         views_.push_back(view);
         log_header_ = fmt::format("LogEngine[{}-{}]: ", my_node_id(), view->id());
-#ifdef __FAAS_STAT_THREAD
-        // todo: use zookeeper sync
-        if (!statistics_thread_started_){
-            statistics_thread_.Start();
-            statistics_thread_started_ = true;   
-        }   
-#endif 
     }
     if (!ready_requests.empty()) {
         HLOG_F(INFO, "{} requests for the new view", ready_requests.size());
