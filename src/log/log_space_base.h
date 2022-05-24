@@ -38,7 +38,7 @@ public:
     void SerializeToProto(MetaLogsProto* meta_logs_proto);
 
 protected:
-    enum Mode { kLiteMode, kFullMode };
+    enum Mode { kLogStorage, kFullMode, kLogProducer, kLogSuffix };
     enum State { kCreated, kNormal, kFrozen, kFinalized };
 
     LogSpaceBase(Mode mode, const View* view, uint16_t sequencer_id);
@@ -63,7 +63,6 @@ protected:
     const View* view_;
     const View::Sequencer* sequencer_node_;
     uint32_t metalog_position_;
-    uint32_t old_metalog_position_;
     std::string log_header_;
 
 private:

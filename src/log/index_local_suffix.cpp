@@ -357,7 +357,7 @@ IndexQueryResult SeqnumSuffixChain::BuildInvalidResult(const IndexQuery& query) 
 }
 
 SeqnumSuffixLink::SeqnumSuffixLink(const View* view, uint16_t sequencer_id)
-    : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
+    : LogSpaceBase(LogSpaceBase::kLogSuffix, view, sequencer_id),
       first_metalog_(true)
     {
     log_header_ = fmt::format("SeqnumSuffixLink[{}-{}]: ", view->id(), sequencer_id);

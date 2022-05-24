@@ -413,28 +413,27 @@ bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
         }
         auto storage_shards = meta_header.my_active_storage_shards();
         size_t active_shards = meta_header.num_active_storage_shards();
-        for (uint32_t metalog_position = meta_header.old_metalog_position() + 1; metalog_position <= meta_header.metalog_position(); metalog_position++) {
-            if(storage_shards_index_updates_.contains(metalog_position)){
-                size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
-                storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
-                size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
-                DCHECK_GE(after_update, before_update);
-                end_seqnum_positions_[metalog_position] = 
-                    std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
-                index_data_new = after_update > before_update; //check if some of the shards contributed
-            } else {
-                HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
-                storage_shards_index_updates_.insert({
-                    metalog_position,
-                    {
-                        active_shards, // store the active shards for this metalog
-                        absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
-                    }
-                });
-                DCHECK(0 < storage_shards_index_updates_.size());
-                end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
-                index_data_new = true;
-            }
+        uint32_t metalog_position = meta_header.metalog_position();
+        if(storage_shards_index_updates_.contains(metalog_position)){
+            size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
+            storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
+            size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
+            DCHECK_GE(after_update, before_update);
+            end_seqnum_positions_[metalog_position] = 
+                std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
+            index_data_new = after_update > before_update; //check if some of the shards contributed
+        } else {
+            HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
+            storage_shards_index_updates_.insert({
+                metalog_position,
+                {
+                    active_shards, // store the active shards for this metalog
+                    absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
+                }
+            });
+            DCHECK(0 < storage_shards_index_updates_.size());
+            end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
+            index_data_new = true;
         }
     }
     return index_data_new;

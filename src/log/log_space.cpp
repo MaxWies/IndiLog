@@ -193,7 +193,7 @@ MetaLogBackup::MetaLogBackup(const View* view, uint16_t sequencer_id)
 MetaLogBackup::~MetaLogBackup() {}
 
 LogProducer::LogProducer(uint16_t storage_shard_id, const View* view, uint16_t sequencer_id, uint32_t next_start_id)
-    : LogSpaceBase(LogSpaceBase::kLiteMode, view, sequencer_id),
+    : LogSpaceBase(LogSpaceBase::kLogProducer, view, sequencer_id),
       next_localid_(bits::JoinTwo32(storage_shard_id, next_start_id)) {
     AddInterestedShard(storage_shard_id);
     log_header_ = fmt::format("LogProducer[{}-{}]: ", view->id(), sequencer_id);
@@ -248,7 +248,7 @@ void LogProducer::OnFinalized(uint32_t metalog_position) {
 }
 
 LogStorage::LogStorage(uint16_t storage_id, const View* view, uint16_t sequencer_id)
-    : LogSpaceBase(LogSpaceBase::kLiteMode, view, sequencer_id),
+    : LogSpaceBase(LogSpaceBase::kLogStorage, view, sequencer_id),
       storage_node_(view_->GetStorageNode(storage_id)),
       shard_progress_dirty_(false),
       persisted_seqnum_position_(0) {
@@ -418,7 +418,6 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
     auto meta_header = index_data_.add_meta_headers();
     meta_header->set_metalog_position(metalog_position_);
-    meta_header->set_old_metalog_position(old_metalog_position_);
     meta_header->set_end_seqnum_position(local_seqnum_position());
     meta_header->set_num_active_storage_shards(uint32_t(active_storage_shard_ids().size()));
     for(uint16_t active_storage_shard_id : active_storage_shard_ids()){
