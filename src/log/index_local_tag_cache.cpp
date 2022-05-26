@@ -26,7 +26,10 @@ TagEntry::TagEntry(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id,
       popularity_(popularity),
       complete_(false)
     {
-        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, TagSuffixLink{{seqnum, storage_shard_id}});
+        TagSuffixLink tag_suffix_link;
+        tag_suffix_link.seqnums.push_back(seqnum);
+        tag_suffix_link.storage_shard_ids.push_back(storage_shard_id);
+        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, tag_suffix_link);
     }
 
 TagEntry::~TagEntry(){}
@@ -34,11 +37,46 @@ TagEntry::~TagEntry(){}
  void TagEntry::Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity){
     auto tag_suffix = tag_suffix_.find(view_id);
     if(tag_suffix == tag_suffix_.end()){
-        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, TagSuffixLink{{seqnum, storage_shard_id}});
+        TagSuffixLink tag_suffix_link;
+        tag_suffix_link.seqnums.push_back(seqnum);
+        tag_suffix_link.storage_shard_ids.push_back(storage_shard_id);
+        tag_suffix_.emplace_hint(tag_suffix_.end(), view_id, tag_suffix_link);
     } else {
-        tag_suffix_.at(view_id).emplace_hint(tag_suffix_.at(view_id).end(), seqnum, storage_shard_id);
+        tag_suffix_.at(view_id).seqnums.push_back(seqnum);
+        tag_suffix_.at(view_id).storage_shard_ids.push_back(storage_shard_id);
     }
     popularity_ = popularity;
+}
+
+void TagEntry::Evict(uint16_t per_tag_seqnums_limit, size_t* num_evicted_seqnums){
+    size_t erase_counter = 0;
+    size_t num_seqnums_in_suffix = NumSeqnumsInSuffix();
+    if (num_seqnums_in_suffix > per_tag_seqnums_limit){
+        erase_counter = num_seqnums_in_suffix - per_tag_seqnums_limit;
+    }
+    auto it = tag_suffix_.begin();
+    while (0 < erase_counter && it != tag_suffix_.end()) {
+        TagSuffixLink* link = &it->second;
+        size_t seqnums_to_evict = std::min(erase_counter, link->seqnums.size());
+        link->seqnums.erase(link->seqnums.begin(), link->seqnums.begin() + gsl::narrow_cast<int>(seqnums_to_evict));
+        link->storage_shard_ids.erase(link->storage_shard_ids.begin(), link->storage_shard_ids.begin() + gsl::narrow_cast<int>(seqnums_to_evict));
+        if (link->seqnums.empty()){
+            // link is empty
+            it = tag_suffix_.erase(it);
+        } else {
+            ++it;
+        }
+        erase_counter -= seqnums_to_evict;
+        *num_evicted_seqnums += seqnums_to_evict;
+    }
+}
+
+size_t TagEntry::NumSeqnumsInSuffix() {
+    size_t size = 0;
+    for (auto& [view_id, suffix_link] : tag_suffix_){
+        size += suffix_link.seqnums.size();
+    }
+    return size;
 }
 
 PerSpaceTagCache::PerSpaceTagCache(uint32_t user_logspace)
@@ -54,57 +92,64 @@ static inline void TagSuffixGetHead(const TagSuffix& suffix, uint16_t sequencer_
     DCHECK(!suffix.empty());
     uint16_t view_id = suffix.begin()->first;
     TagSuffixLink link = suffix.begin()->second;
-    DCHECK(!link.empty());
-    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), link.begin()->first);
-    *shard_id = link.begin()->second;
+    DCHECK(!link.seqnums.empty());
+    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), link.seqnums.front());
+    *shard_id = link.storage_shard_ids.front();
 }
 
 static inline void TagSuffixGetTail(const TagSuffix& suffix, uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id){
     DCHECK(!suffix.empty());
     uint16_t view_id = (--suffix.end())->first;
-    TagSuffixLink link = (--suffix.begin())->second;
-    DCHECK(!link.empty());
-    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), (--link.end())->first);
-    *shard_id = (--link.end())->second;
+    TagSuffixLink link = (--suffix.end())->second;
+    DCHECK(!link.seqnums.empty());
+    *seqnum = bits::JoinTwo32(bits::JoinTwo16(view_id, sequencer_id), link.seqnums.back());
+    *shard_id = link.storage_shard_ids.back();
 }
 
 static inline bool TagSuffixLinkFindPrev(const TagSuffixLink& link, uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id){
-    DCHECK(!link.empty());
+    DCHECK(!link.seqnums.empty());
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
-    auto it = link.lower_bound(local_seqnum);
-    if(it == link.begin()){
-        if (it->first < local_seqnum){
-            return false;
+
+    auto it = absl::c_upper_bound(
+        link.seqnums, local_seqnum, [] (uint32_t lhs, uint32_t rhs) {
+            return lhs < rhs;
         }
-    }
-    if(it == link.end() || it->first != local_seqnum){
-        // get lower
+    );
+
+    if (it == link.seqnums.begin()){
+        return false;
+    } else {
         --it;
+        *seqnum = bits::JoinTwo32(identifier, *it);
+        *shard_id = link.storage_shard_ids.at(gsl::narrow_cast<size_t>(it - link.seqnums.begin()));
+        LOG_F(INFO, "query_seqnum={}, result_seqnum={}", bits::HexStr0x(query_seqnum), *seqnum);
+        return true;
     }
-    *seqnum = bits::JoinTwo32(identifier, it->first);
-    *shard_id = it->second;
-    return true;
 }
 static inline void TagSuffixLinkGetTail(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
-    DCHECK(!link.empty());
-    *seqnum = bits::JoinTwo32(identifier, (--link.end())->first);
-    *shard_id = (--link.end())->second;
+    DCHECK(!link.seqnums.empty());
+    *seqnum = bits::JoinTwo32(identifier, link.seqnums.back());
+    *shard_id = link.storage_shard_ids.back();
 }
 static inline bool TagSuffixLinkFindNext(const TagSuffixLink& link, uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id){
-    DCHECK(!link.empty());
+    DCHECK(!link.seqnums.empty());
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
-    auto it = link.lower_bound(local_seqnum);
-    if(it == link.end()){
+    auto it = absl::c_lower_bound(
+        link.seqnums, local_seqnum, [] (uint32_t lhs, uint32_t rhs) {
+            return lhs < rhs;
+        }
+    );
+    if(it == link.seqnums.end()){
         return false;
     }
-    *seqnum = bits::JoinTwo32(identifier, it->first);
-    *shard_id = it->second;
+    *seqnum = bits::JoinTwo32(identifier, *it);
+    *shard_id = link.storage_shard_ids.at(gsl::narrow_cast<size_t>(it - link.seqnums.begin()));       //it->second;
     return true;
 }
 static inline void TagSuffixLinkGetHead(const TagSuffixLink& link, uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id){
-    DCHECK(!link.empty());
-    *seqnum = bits::JoinTwo32(identifier, link.begin()->first);
-    *shard_id = link.begin()->second;
+    DCHECK(!link.seqnums.empty());
+    *seqnum = bits::JoinTwo32(identifier, link.seqnums.front());
+    *shard_id = link.storage_shard_ids.front();
 }
 } // namespace
 
@@ -195,6 +240,24 @@ void PerSpaceTagCache::Remove(uint64_t popularity){
     }
 }
 
+void PerSpaceTagCache::Evict(uint64_t popularity, uint16_t pet_tag_seqnums_limit, size_t* evicted_seqnums){
+    auto it = tags_.begin();
+    while (it != tags_.end()){
+        if (it->second->popularity_ <= popularity){
+            HVLOG_F(1, "Evict tag {} because it is unpopular", it->first);
+            *evicted_seqnums += it->second->NumSeqnumsInSuffix();
+            tags_.erase(it);
+            if(pending_min_tags_.contains(it->first)) {
+                pending_min_tags_.erase(it->first);
+            }
+        } else {
+            // evict suffix at front if tag reached limit
+            it->second->Evict(pet_tag_seqnums_limit, evicted_seqnums);
+        }
+        ++it;
+    }
+}
+
 void PerSpaceTagCache::UpdatePopularity(uint64_t tag, uint64_t popularity){
     DCHECK(tags_.contains(tag));
     tags_.at(tag)->popularity_ = popularity;
@@ -214,7 +277,7 @@ void PerSpaceTagCache::Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* 
         }
         num_tag_suffix += tag_entry->tag_suffix_.size();
         for (auto& [view_id, suffix_link] : tag_entry->tag_suffix_){
-            num_suffix_seqnums += suffix_link.size();
+            num_suffix_seqnums += suffix_link.seqnums.size();
         }
     }
     *num_tags += tags_.size();
@@ -409,12 +472,16 @@ bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
     for(int i = 0; i < index_data.meta_headers_size(); i++){
         auto meta_header = index_data.meta_headers().at(i);
         if (meta_header.metalog_position() <= metalog_position_){
+            HVLOG_F(1, "Received metalog_position={} lower|equal my metalog_position={}", meta_header.metalog_position(), metalog_position_);
             continue;
         }
         auto storage_shards = meta_header.my_active_storage_shards();
         size_t active_shards = meta_header.num_active_storage_shards();
         uint32_t metalog_position = meta_header.metalog_position();
         if(storage_shards_index_updates_.contains(metalog_position)){
+            HVLOG_F(1, "Received pending metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+                metalog_position, storage_shards.size(), active_shards
+            );
             size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
             storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
             size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
@@ -423,7 +490,9 @@ bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
                 std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
             index_data_new = after_update > before_update; //check if some of the shards contributed
         } else {
-            HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
+            HVLOG_F(1, "Received new metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+                metalog_position, storage_shards.size(), active_shards
+            );
             storage_shards_index_updates_.insert({
                 metalog_position,
                 {
@@ -464,9 +533,11 @@ bool TagCacheView::TryCompleteIndexUpdates(uint32_t* next_seqnum_position){
     return false;
 }
 
-TagCache::TagCache(uint16_t sequencer_id, size_t cache_size)
+TagCache::TagCache(uint16_t sequencer_id, size_t max_cache_size, uint32_t per_tag_seqnums_limit)
     : sequencer_id_(sequencer_id),
-      cache_size_(cache_size)
+      max_cache_size_(max_cache_size),
+      per_tag_seqnums_limit_(per_tag_seqnums_limit),
+      cache_size_(0)
     {
         log_header_ = fmt::format("TagCache[{}]: ", sequencer_id);
     }
@@ -490,7 +561,7 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
         if (num_tags < 1){
-            // cache stores only seqnum with tags
+            // cache stores only seqnums with tags
             continue;
         }
         uint32_t seqnum = index_data.seqnum_halves(i);
@@ -523,13 +594,23 @@ void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const 
     );
 }
 
-void TagCache::Clear(){
-    while(tags_list_.size() > cache_size_){
-        auto last_it = tags_list_.end(); last_it--;
-        auto& [user_logspace, tag, popularity] = *last_it;
-        per_space_cache_.at(user_logspace)->Remove(tag, popularity);
-        tags_list_.pop_back();
-    }   
+void TagCache::Evict(){
+    while(cache_size_ > max_cache_size_){
+        HVLOG_F(1, "Evict because cache size too high. cache_size={}, max_cache_size={}", cache_size_, max_cache_size_);
+        if (popularity_sequence_.empty()) {
+            LOG(FATAL) << "Popularity sequence cannot be empty when cache gets evicted";
+        }
+        size_t evicted_seqnums = 0;
+        size_t ix = gsl::narrow_cast<size_t>(std::ceil(popularity_sequence_.size() * 0.2));
+        uint64_t popularity = popularity_sequence_.at(ix);
+        for(auto& [user_logspace, per_space_tag_cache] : per_space_cache_) {
+            per_space_tag_cache->Evict(popularity, per_tag_seqnums_limit_, &evicted_seqnums);
+        }
+        popularity_sequence_.erase(popularity_sequence_.begin(), popularity_sequence_.begin()+gsl::narrow_cast<int>(ix)+1);
+        DCHECK(cache_size_ >= evicted_seqnums);
+        cache_size_ -= evicted_seqnums;
+        HVLOG_F(1, "Evicted {} seqnums. cache_size={}", evicted_seqnums, cache_size_);
+    }
 }
 
 bool TagCache::TagExists(uint32_t user_logspace, uint64_t tag){
@@ -556,6 +637,7 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
     bool advanced = false;
     uint32_t end_seqnum_position;
     while (views_.at(view_id)->TryCompleteIndexUpdates(&end_seqnum_position)){
+        size_t new_seqnums = 0;
         uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
         {
             auto iter = received_data_.begin();
@@ -574,12 +656,14 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
                         index_data.engine_id,
                         popularity
                     );
-                    tags_list_.push_front({index_data.user_logspace, tag, popularity});
+                    new_seqnums++;
                 }
                 iter = received_data_.erase(iter);
             }
         }
         advanced = true;
+        cache_size_ += new_seqnums;
+        popularity_sequence_.push_back(popularity);
         HVLOG_F(1, "Advanced metalog to {}", views_.at(view_id)->metalog_position());
     }
     if (advanced) {
@@ -592,9 +676,8 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
             ProcessQuery(query);
             iter = pending_queries_.erase(iter);
         }
+        Evict();
     }
-    //todo
-    //Clear();
     return advanced;
 }
 

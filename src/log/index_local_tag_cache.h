@@ -5,7 +5,10 @@
 namespace faas {
 namespace log {
 
-using TagSuffixLink = std::map<uint32_t, uint16_t>;
+struct TagSuffixLink {
+    std::vector<uint32_t> seqnums;
+    std::vector<uint16_t> storage_shard_ids;
+};
 using TagSuffix = std::map<uint16_t, TagSuffixLink>;
 
 class TagEntry{
@@ -17,6 +20,9 @@ public:
     ~TagEntry();
 
     void Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
+    void Evict(uint16_t per_tag_seqnums_limit, size_t* num_evicted_seqnums);
+    size_t NumSeqnumsInSuffix();
+
     TagSuffix tag_suffix_;
     uint64_t seqnum_min_;
     uint16_t shard_id_min_;
@@ -36,6 +42,7 @@ public:
     void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity);
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
+    void Evict(uint64_t popularity, uint16_t per_tag_seqnums_limit, size_t* evicted_seqnums);
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
     bool TagExists(uint64_t tag);
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
@@ -78,7 +85,7 @@ class TagCache {
 public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
 
-    TagCache(uint16_t sequencer_id_, size_t cache_size);
+    TagCache(uint16_t sequencer_id_, size_t max_cache_size, uint32_t per_tag_seqnums_limit);
     ~TagCache();
 
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
@@ -117,7 +124,10 @@ private:
                   IndexQuery> pending_queries_;
     QueryResultVec pending_query_results_;
 
+    size_t max_cache_size_;
+    uint32_t per_tag_seqnums_limit_;
     size_t cache_size_;
+    std::vector<uint64_t> popularity_sequence_;
 
     static constexpr uint32_t kMaxMetalogPosition = std::numeric_limits<uint32_t>::max();
 
@@ -132,13 +142,12 @@ private:
     }
 
     absl::flat_hash_map</* user_logspace */ uint32_t, std::unique_ptr<PerSpaceTagCache>> per_space_cache_;
-    std::list<std::tuple<uint32_t, uint64_t, uint64_t>> tags_list_;
 
     PerSpaceTagCache* GetOrCreatePerSpaceTagCache(uint32_t user_logspace);
 
     // void OnFinalized(uint32_t metalog_position);
     void Trim(size_t* counter);
-    void Clear();
+    void Evict();
 
     void ProcessQuery(const IndexQuery& query);
     bool ProcessBlockingQuery(const IndexQuery& query);

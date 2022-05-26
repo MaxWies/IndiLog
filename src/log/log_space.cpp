@@ -417,7 +417,7 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
 
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
     auto meta_header = index_data_.add_meta_headers();
-    meta_header->set_metalog_position(metalog_position_);
+    meta_header->set_metalog_position(metalog_position());
     meta_header->set_end_seqnum_position(local_seqnum_position());
     meta_header->set_num_active_storage_shards(uint32_t(active_storage_shard_ids().size()));
     for(uint16_t active_storage_shard_id : active_storage_shard_ids()){

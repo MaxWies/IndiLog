@@ -865,7 +865,11 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
                 locked_suffix_chain->Extend(current_view_);
             }
             if(!tag_cache_collection_.LogSpaceExists(received_message.sequencer_id)){
-                tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_tag_cache_cap)));
+                tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(
+                    received_message.sequencer_id, 
+                    absl::GetFlag(FLAGS_slog_engine_tag_cache_cap), 
+                    absl::GetFlag(FLAGS_slog_engine_per_tag_seqnums_limit))
+                );
             }
             auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(received_message.sequencer_id);
             {
