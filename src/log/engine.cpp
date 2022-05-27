@@ -26,11 +26,12 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false) 
+      current_view_active_(false)
 #ifdef __FAAS_STAT_THREAD
       ,
       statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
-      statistics_thread_started_(false)
+      statistics_thread_started_(false),
+      statistic_thread_interval_sec_(0) // default, set by zk command
 #endif
       {}
 
@@ -689,18 +690,22 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
 }
 
 #ifdef __FAAS_STAT_THREAD
-void Engine::OnActivateStatisticsThread() {
+void Engine::OnActivateStatisticsThread(int statistic_thread_interval_sec) {
     if (!statistics_thread_started_){
+        statistic_thread_interval_sec_ = statistic_thread_interval_sec;
         statistics_thread_.Start();
-        statistics_thread_started_ = true;   
+        statistics_thread_started_ = true;
     }
 }
 
 void Engine::StatisticsThreadMain() {
+    if(statistic_thread_interval_sec_ < 1) {
+        LOG(FATAL) << "Statistic thread interval must be at least 1 second";
+    }
     int timerfd = io_utils::CreateTimerFd();
     CHECK(timerfd != -1) << "Failed to create timerfd";
     io_utils::FdUnsetNonblocking(timerfd);
-    absl::Duration interval = absl::Seconds(absl::GetFlag(FLAGS_slog_engine_stat_thread_interval));
+    absl::Duration interval = absl::Seconds(statistic_thread_interval_sec_);
     CHECK(io_utils::SetupTimerFdPeriodic(timerfd, interval, interval))
         << "Failed to setup timerfd with interval " << interval;
 #ifdef __FAAS_OP_LATENCY

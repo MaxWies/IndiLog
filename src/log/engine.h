@@ -35,8 +35,9 @@ private:
 #ifdef __FAAS_STAT_THREAD
     base::Thread statistics_thread_;
     bool statistics_thread_started_;
+    int statistic_thread_interval_sec_;
     uint64_t previous_total_ops_counter_;
-    void OnActivateStatisticsThread() override;
+    void OnActivateStatisticsThread(int statistic_thread_interval_sec) override;
     void StatisticsThreadMain();
 #endif
 
