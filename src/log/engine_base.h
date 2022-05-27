@@ -120,7 +120,7 @@ protected:
         return next_local_op_id_.load();
     }
     void OnStatZNodeCreated(std::string_view path, std::span<const char> contents);
-    virtual void OnActivateStatisticsThread() = 0;
+    virtual void OnActivateStatisticsThread(int statistic_thread_interval_sec) = 0;
 #endif
 
 #ifdef __FAAS_OP_LATENCY

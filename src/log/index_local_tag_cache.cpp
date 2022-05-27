@@ -48,7 +48,7 @@ TagEntry::~TagEntry(){}
     popularity_ = popularity;
 }
 
-void TagEntry::Evict(uint16_t per_tag_seqnums_limit, size_t* num_evicted_seqnums){
+void TagEntry::Evict(uint32_t per_tag_seqnums_limit, size_t* num_evicted_seqnums){
     size_t erase_counter = 0;
     size_t num_seqnums_in_suffix = NumSeqnumsInSuffix();
     if (num_seqnums_in_suffix > per_tag_seqnums_limit){
@@ -240,7 +240,7 @@ void PerSpaceTagCache::Remove(uint64_t popularity){
     }
 }
 
-void PerSpaceTagCache::Evict(uint64_t popularity, uint16_t pet_tag_seqnums_limit, size_t* evicted_seqnums){
+void PerSpaceTagCache::Evict(uint64_t popularity, uint32_t pet_tag_seqnums_limit, size_t* evicted_seqnums){
     auto it = tags_.begin();
     while (it != tags_.end()){
         if (it->second->popularity_ <= popularity){

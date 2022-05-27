@@ -448,11 +448,15 @@ void EngineBase::OnStatZNodeCreated(std::string_view path,
                                    std::span<const char> contents) {
     if (path == "start") {
         HLOG(INFO) << "Received statistics thread activation command";
-        OnActivateStatisticsThread();
+        int parsed;
+        if (!absl::SimpleAtoi(std::string_view(contents.data(), contents.size()), &parsed)) {
+            LOG(ERROR) << "Failed to parse node_id: " << path;
+            return;
+        }
+        OnActivateStatisticsThread(parsed);
     } else {
         HLOG(ERROR) << "Unknown command: " << path;
     }
-    zk_session()->Delete(fmt::format("stat/{}", path), nullptr);
 }
 #endif
 

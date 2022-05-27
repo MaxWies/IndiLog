@@ -145,7 +145,7 @@ void Index::PerSpaceIndex::Aggregate(size_t* num_seqnums, size_t* num_tags, size
     }
     *num_seqnums_of_tags += local_num_seqnums_of_tags;
     *size += (
-        sizeof(uint32_t) * engine_ids_.size()           // seqnum keys for engine_ids
+          sizeof(uint32_t) * engine_ids_.size()         // seqnum keys for engine_ids
         + sizeof(uint16_t) * engine_ids_.size()         // engine_ids
         + sizeof(uint32_t) * seqnums_.size()            // seqnums
         + sizeof(uint64_t) * seqnums_by_tag_.size()     // tags

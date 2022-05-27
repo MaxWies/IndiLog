@@ -47,7 +47,6 @@ bool LogSpaceBase::ProvideMetaLog(const MetaLogProto& meta_log) {
     }
     uint32_t seqnum = meta_log.metalog_seqnum();
     if (seqnum < metalog_position_) {
-        HLOG_F(WARNING, "MetalogUpdate: Cannot apply metalog because metalog metalog_position={} lower than my metalog_position={}", seqnum, metalog_position_);
         return false;
     }
     HVLOG_F(1, "MetalogUpdate: Apply metalog_seqnum={}", seqnum);

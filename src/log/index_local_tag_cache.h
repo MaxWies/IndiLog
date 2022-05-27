@@ -20,7 +20,7 @@ public:
     ~TagEntry();
 
     void Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
-    void Evict(uint16_t per_tag_seqnums_limit, size_t* num_evicted_seqnums);
+    void Evict(uint32_t per_tag_seqnums_limit, size_t* num_evicted_seqnums);
     size_t NumSeqnumsInSuffix();
 
     TagSuffix tag_suffix_;
@@ -42,7 +42,7 @@ public:
     void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity);
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
-    void Evict(uint64_t popularity, uint16_t per_tag_seqnums_limit, size_t* evicted_seqnums);
+    void Evict(uint64_t popularity, uint32_t per_tag_seqnums_limit, size_t* evicted_seqnums);
     void UpdatePopularity(uint64_t tag, uint64_t popularity);
     bool TagExists(uint64_t tag);
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
