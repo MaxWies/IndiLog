@@ -1033,7 +1033,7 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
         switch (result.state) {
         case IndexQueryResult::kFound:
 #ifdef __FAAS_OP_STAT
-        local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
             ProcessIndexFoundResult(result);
             if (result.original_query.user_tag == kEmptyLogTag){
@@ -1049,6 +1049,9 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
             ProcessIndexContinueResult(result, &more_results);
             break;
         case IndexQueryResult::kInvalid:
+#ifdef __FAAS_OP_STAT
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
             FinishLocalOpWithFailure(
                 onging_reads_.PollChecked(query.client_data),
                 SharedLogResultType::EMPTY, result.metalog_progress);
