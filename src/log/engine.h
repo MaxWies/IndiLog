@@ -41,6 +41,25 @@ private:
     void StatisticsThreadMain();
 #endif
 
+#ifdef __FAAS_OP_STAT
+    std::atomic<uint64_t> append_ops_counter_;
+    std::atomic<uint64_t> read_ops_counter_;
+    std::atomic<uint64_t> local_index_hit_counter_;
+    std::atomic<uint64_t> local_index_miss_counter_;
+    std::atomic<uint64_t> index_min_read_ops_counter_; // has no significance
+    std::atomic<uint64_t> log_cache_hit_counter_;
+    std::atomic<uint64_t> log_cache_miss_counter_;
+    void ResetOpStat(){
+        append_ops_counter_.store(0);
+        read_ops_counter_.store(0);
+        local_index_hit_counter_.store(0);
+        local_index_miss_counter_.store(0);
+        index_min_read_ops_counter_.store(0);
+        log_cache_hit_counter_.store(0);
+        log_cache_miss_counter_.store(0);
+    }
+#endif
+
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;

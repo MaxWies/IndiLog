@@ -33,6 +33,16 @@ Engine::Engine(engine::Engine* engine)
       statistics_thread_started_(false),
       statistic_thread_interval_sec_(0) // default, set by zk command
 #endif
+#ifdef __FAAS_OP_STAT
+      ,
+      append_ops_counter_(0),
+      read_ops_counter_(0),
+      local_index_hit_counter_(0),
+      local_index_miss_counter_(0),
+      index_min_read_ops_counter_(0),
+      log_cache_hit_counter_(0),
+      log_cache_miss_counter_(0) 
+#endif
       {}
 
 Engine::~Engine() {}
@@ -198,6 +208,9 @@ void Engine::HandleLocalAppend(LocalOp* op) {
             locked_producer->LocalAppend(op, &log_metadata.localid);
         }
     }
+#ifdef __FAAS_OP_STAT
+    append_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
     ReplicateLogEntry(view, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
 }
 
@@ -224,6 +237,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
             index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
         }
     }
+#ifdef __FAAS_OP_STAT
+    read_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
     bool use_local_index = true;
     if (absl::GetFlag(FLAGS_slog_engine_force_remote_index)) {
         use_local_index = false;
@@ -248,6 +264,9 @@ void Engine::HandleLocalRead(LocalOp* op) {
         HVLOG_F(1, "There is no local index for sequencer {}, "
                    "will send request to remote engine node",
                 DCHECK_NOTNULL(sequencer_node)->node_id());
+#ifdef __FAAS_OP_STAT
+        local_index_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
         SharedLogMessage request = BuildReadRequestMessage(op);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
         if (!send_success) {
@@ -465,6 +484,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
     if (auto cached_log_entry = LogCacheGet(seqnum); cached_log_entry.has_value()) {
         // Cache hits
         HVLOG_F(1, "Cache hits for log entry (seqnum {})", bits::HexStr0x(seqnum));
+#ifdef __FAAS_OP_STAT
+        log_cache_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
         const LogEntry& log_entry = cached_log_entry.value();
         std::optional<std::string> cached_aux_data = LogCacheGetAuxData(seqnum);
         std::span<const char> aux_data;
@@ -500,6 +522,9 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
         }
     } else {
         // Cache miss
+#ifdef __FAAS_OP_STAT
+        log_cache_miss_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
         const View::Engine* engine_node = nullptr;
         {
             absl::ReaderMutexLock view_lk(&view_mu_);
@@ -570,9 +595,15 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
         const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
+#ifdef __FAAS_OP_STAT
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
             ProcessIndexFoundResult(result);
             break;
         case IndexQueryResult::kEmpty:
+#ifdef __FAAS_OP_STAT
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif
             if (query.origin_node_id == my_node_id()) {
                 FinishLocalOpWithFailure(
                     onging_reads_.PollChecked(query.client_data),
@@ -711,6 +742,9 @@ void Engine::StatisticsThreadMain() {
 #ifdef __FAAS_OP_LATENCY
     ResetOpLatencies();
 #endif
+#ifdef __FAAS_OP_STAT
+    ResetOpStat();
+#endif
     bool running = true;
     while (running) {
         uint64_t exp;
@@ -721,6 +755,7 @@ void Engine::StatisticsThreadMain() {
         CHECK_EQ(gsl::narrow_cast<size_t>(nread), sizeof(uint64_t));
         uint64_t local_op_id = LoadLocalOpId();
         if (previous_local_op_id_ != local_op_id){
+            int64_t now_ts = GetRealtimeSecondTimestamp();
 #ifdef __FAAS_INDEX_MEMORY
             size_t index_num_seqnums = 0;
             size_t index_num_tags = 0;
@@ -741,7 +776,7 @@ void Engine::StatisticsThreadMain() {
                     }
                 );
             }
-            std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()));
+            std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), now_ts));
             ix_memory_file
                 << std::to_string(index_size) << "," 
                 << std::to_string(index_num_seqnums) << "," 
@@ -767,16 +802,29 @@ void Engine::StatisticsThreadMain() {
             }
             {
                 std::ofstream latency_file;
-                latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                latency_file.open(fmt::format("/tmp/slog/stats/latencies-append-{}-{}.csv", my_node_id(), now_ts), std::fstream::app);
                 latency_file << append_latencies.str();
                 latency_file.close();
             }
             {
                 std::ofstream latency_file;
-                latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), GetRealtimeSecondTimestamp()), std::fstream::app);
+                latency_file.open(fmt::format("/tmp/slog/stats/latencies-read-{}-{}.csv", my_node_id(), now_ts), std::fstream::app);
                 latency_file << read_latencies.str();
                 latency_file.close();
             }
+#endif
+#ifdef __FAAS_OP_STAT
+            std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}.csv", my_node_id(), now_ts));
+            op_st_file
+                << std::to_string(append_ops_counter_.load())           << ","
+                << std::to_string(read_ops_counter_.load())             << "," 
+                << std::to_string(local_index_hit_counter_.load())      << "," 
+                << std::to_string(local_index_miss_counter_.load())     << "," 
+                << std::to_string(index_min_read_ops_counter_.load())   << "," 
+                << std::to_string(log_cache_hit_counter_.load())        << "," 
+                << std::to_string(log_cache_miss_counter_.load())       << "\n"
+            ;
+            op_st_file.close();
 #endif
             previous_local_op_id_ = local_op_id;
         }
