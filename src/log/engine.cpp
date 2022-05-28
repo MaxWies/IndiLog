@@ -1213,9 +1213,9 @@ IndexQuery Engine::BuildIndexQuery(const IndexQueryResult& result) {
 #ifdef __FAAS_STAT_THREAD
 void Engine::OnActivateStatisticsThread(int statistic_thread_interval_sec) {
     if (!statistics_thread_started_){
+        statistic_thread_interval_sec_ = statistic_thread_interval_sec;
         statistics_thread_.Start();
         statistics_thread_started_ = true;
-        statistic_thread_interval_sec_ = statistic_thread_interval_sec;
     }
 }
 
@@ -1276,7 +1276,7 @@ void Engine::StatisticsThreadMain() {
             }
 #endif
 #ifdef __FAAS_OP_STAT
-            std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}", my_node_id(), now_ts));
+            std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}.csv", my_node_id(), now_ts));
             op_st_file
                 << std::to_string(append_ops_counter_.load())           << ","
                 << std::to_string(read_ops_counter_.load())             << "," 
