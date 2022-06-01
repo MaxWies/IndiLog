@@ -142,7 +142,6 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
-        // uint32_t logspace_id = current_view_->LogSpaceIdentifier(request.user_logspace);
         // TODO: index nodes have all physical log spaces?
         index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
     }
@@ -276,10 +275,14 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
         bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
     );
     DCHECK_NE(index_query_result_other.state, IndexQueryResult::kContinue); //"kContinue cannot be merged"
-    absl::MutexLock view_lk(&view_mu_);
+    size_t num_index_shards; 
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        num_index_shards = current_view_->num_index_shards();
+    }
+    std::pair<uint16_t, uint64_t> key = std::make_pair(index_query_result_other.original_query.origin_node_id, index_query_result_other.original_query.client_data);
     absl::MutexLock lk(&index_reads_mu_);
     IndexReadOp* op;
-    std::pair<uint16_t, uint64_t> key = std::make_pair(index_query_result_other.original_query.origin_node_id, index_query_result_other.original_query.client_data);
     bool exists = ongoing_index_reads_.contains(key);
     if (!exists) {
         op = index_read_op_pool_.Get();
@@ -335,11 +338,11 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
         HVLOG_F(1, "IndexRead: Merged result merged={} for op_id={}", op->merged_nodes.size(), op->id);
     }
     *merged_index_query_result = std::move(op->index_query_result);
-    if(op->merged_nodes.size() == current_view_->num_index_shards()){
+    if(op->merged_nodes.size() == num_index_shards){
         ongoing_index_reads_.erase(key);
         return true;
     }
-    DCHECK_LT(op->merged_nodes.size(), current_view_->num_index_shards());
+    DCHECK_LT(op->merged_nodes.size(), num_index_shards);
     return false;
 }
 

@@ -313,6 +313,7 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
     SharedLogResultType type;
     DCHECK_EQ(bits::LowHalf32(logspace_id), my_node_id());
     bool registration_ok;
+    uint32_t metalog_position = 0;
     if (result == SharedLogResultType::REGISTER_ENGINE){
         auto logspace_ptr = primary_collection_.GetLogSpaceChecked(logspace_id);
         {
@@ -327,6 +328,7 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
             auto locked_logspace = logspace_ptr.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
             registration_ok = locked_logspace->UnblockShard(received_message.shard_id, &local_start_id);
+            metalog_position = locked_logspace->metalog_position();
         }
         if(registration_ok){
             view_mutable_.PutStorageShardOccupation(
@@ -347,9 +349,10 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
         received_message.engine_node_id,
         local_start_id
     );
+    response.metalog_position = metalog_position;
     if(registration_ok){
-        HLOG_F(INFO, "Registration ok, send response. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}, local_start_id={}",
-        my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id, bits::HexStr0x(local_start_id));
+        HLOG_F(INFO, "Registration ok, send response. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}, local_start_id={}, metalog_pos={}",
+        my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id, bits::HexStr0x(local_start_id), metalog_position);
     }
     if(!SendRegistrationResponse(received_message, protocol::ConnType::SEQUENCER_TO_ENGINE, &response)){
         HLOG(ERROR) << "Could not send registration response";

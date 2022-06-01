@@ -116,6 +116,7 @@ enum class SharedLogResultType : uint16_t {
     AUXDATA_OK  = 0x24,
     INDEX_OK    = 0x25,
     INDEX_MIN_OK = 0x26,
+    POSTPONE_OK = 0x27,
     // Error results
     BAD_ARGS    = 0x30,
     DISCARDED   = 0x31,  // Log to append is discarded
@@ -268,12 +269,8 @@ struct SharedLogMessage {
     };
 
     union {
-        uint32_t metalog_position; // [16:20] (only used by META_PROG)
+        uint32_t metalog_position; // [16:20] (only used by META_PROG | REGISTRATION)
         uint32_t user_logspace;    // [16:20]
-        struct {
-            uint16_t shard_id; // [16:20] (only used by REGISTRATION)
-            uint16_t engine_node_id;
-        } __attribute__ ((packed));
     };
 
     union {
@@ -286,7 +283,7 @@ struct SharedLogMessage {
             uint16_t use_master_node_id;
             uint16_t master_node_id; // (only used for index tier)
         } __attribute__ ((packed));
-        uint32_t local_start_id;   // only used by storage nodes in registration
+        uint32_t local_start_id;   // (only used by REGISTRATION)
     };
     union {
         uint64_t query_tag;   // [24:32]
@@ -295,6 +292,12 @@ struct SharedLogMessage {
             uint16_t aux_data_size; // [26:28]
 
             uint32_t _5_padding_5_;
+        } __attribute__ ((packed));
+        struct {
+            uint16_t shard_id;          // [24:26] (only used by REGISTRATION)
+            uint16_t engine_node_id;    // [26:28] (only used by REGISTRATION)
+
+            uint32_t _6_padding_6_;
         } __attribute__ ((packed));
     };
 

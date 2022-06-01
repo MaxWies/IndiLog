@@ -156,6 +156,7 @@ void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutabl
         HLOG(FATAL) << "Sending metalog without any position but new seqnums";
     }
     if (index_data_proto.meta_headers_size() < 1){
+        HVLOG(1) << "No metaheaders";
         return;
     }
     uint32_t logspace_id = index_data_proto.logspace_id();

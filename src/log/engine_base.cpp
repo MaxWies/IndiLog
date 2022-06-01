@@ -30,7 +30,10 @@ using server::NodeWatcher;
 EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
-      next_local_op_id_(0) {}
+      next_local_op_id_(0),
+      postpone_registration_(absl::GetFlag(FLAGS_slog_engine_postpone_registration)),
+      postpone_caching_(absl::GetFlag(FLAGS_slog_engine_postpone_caching)) 
+      {}
 
 EngineBase::~EngineBase() {}
 
@@ -74,6 +77,10 @@ void EngineBase::SetupZKWatchers() {
         }
     );
     view_watcher_.StartWatching(zk_session());
+    activation_watcher_.emplace(zk_session(), "activate");
+    activation_watcher_->SetNodeCreatedCallback(
+        absl::bind_front(&EngineBase::OnActivationZNodeCreated, this));
+    activation_watcher_->Start();
 #ifdef __FAAS_STAT_THREAD
     statistics_watcher_.emplace(zk_session(), "stat");
     statistics_watcher_->SetNodeCreatedCallback(
@@ -190,6 +197,13 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
             return;
         }
         ctx = fn_call_ctx_.at(func_call.full_call_id);
+        if (postpone_caching_ || postpone_registration_) {
+            Message response = MessageHelper::NewSharedLogOpSucceeded(
+                SharedLogResultType::POSTPONE_OK, kInvalidLogSeqNum
+            );
+            engine_->SendFuncWorkerMessage(message.log_client_id, &response);
+            return;
+        }
     }
 
     LocalOp* op = log_op_pool_.Get();
@@ -437,6 +451,34 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
     }
     HLOG_F(ERROR, "Failed to send registration request to destination_id={}", destination_id);
     return false;
+}
+
+void EngineBase::OnActivationZNodeCreated(std::string_view path,
+                                   std::span<const char> contents) {
+    if (path == "register") {
+        HLOG(INFO) << "Received activation command";
+        {
+            absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+            if (!postpone_registration_) {
+                // already registered
+                return;
+            }
+            postpone_registration_ = false;
+        }
+        OnViewCreated(missed_view_);
+    } else if (path == "cache") {
+        {
+            absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+            if (!postpone_caching_) {
+                // already does caching
+                return;
+            }
+            postpone_caching_ = false;
+        }
+        OnActivateCaching();
+    } else {
+        HLOG(ERROR) << "Unknown command: " << path;
+    }
 }
 
 server::IOWorker* EngineBase::SomeIOWorker() {

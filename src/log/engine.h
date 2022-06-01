@@ -48,6 +48,9 @@ private:
     log_utils::FutureRequests       future_requests_;
     log_utils::ThreadedMap<LocalOp> onging_reads_;
 
+    absl::flat_hash_map<uint32_t, uint32_t> max_metalog_position_;
+    absl::flat_hash_map<uint32_t, uint32_t> max_index_metalog_position_;  
+
 #ifdef __FAAS_STAT_THREAD
     base::Thread statistics_thread_;
     bool statistics_thread_started_;
@@ -79,6 +82,8 @@ private:
     void OnViewCreated(const View* view) override;
     void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
+
+    void OnActivateCaching() override;
 
     void HandleLocalAppend(LocalOp* op) override;
     void HandleLocalTrim(LocalOp* op) override;

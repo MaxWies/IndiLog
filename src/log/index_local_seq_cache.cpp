@@ -8,14 +8,19 @@ __END_THIRD_PARTY_HEADERS
 namespace faas {
 namespace log {
 
-SeqnumCache::SeqnumCache(int cap_num_rec){
-    dbm_.reset(new tkrzw::CacheDBM(int64_t{cap_num_rec}, -1));
-    log_header_ = "SeqnumCache: ";
-}
+SeqnumCache::SeqnumCache(int cap_num_rec)
+    : discard_(false)
+    {
+        dbm_.reset(new tkrzw::CacheDBM(int64_t{cap_num_rec}, -1));
+        log_header_ = "SeqnumCache: ";
+    }
 
 SeqnumCache::~SeqnumCache() {}
 
 void SeqnumCache::Put(uint64_t seqnum, uint16_t storage_shard_id){
+    if (discard_){
+        return;
+    }
     std::string key_str = fmt::format("0_{:016x}", seqnum);
     std::string data = fmt::format("{}", storage_shard_id);
     HVLOG_F(1, "Put seqnum={} in cache", bits::HexStr0x(seqnum));
@@ -36,6 +41,13 @@ bool SeqnumCache::Get(uint64_t seqnum, uint16_t* storage_shard_id){
     } else {
         return false;
     }
+}
+
+void SeqnumCache::ActivateDiscarding() {
+    discard_ = true;
+}
+void SeqnumCache::DeactivateDiscarding() {
+    discard_ = false;
 }
 
 void SeqnumCache::Aggregate(size_t* num_seqnums, size_t* size){

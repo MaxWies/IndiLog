@@ -16,14 +16,14 @@ SeqnumSuffixChain::SeqnumSuffixChain(uint16_t sequence_number_id, size_t max_suf
 
 SeqnumSuffixChain::~SeqnumSuffixChain() {}
 
-void SeqnumSuffixChain::Extend(const View* view){
+void SeqnumSuffixChain::Extend(const View* view, uint32_t metalog_position){
     uint16_t id = view->id();
     DCHECK(suffix_chain_.count(id) == 0);
     if (!IsEmpty()){
         DCHECK(suffix_chain_.begin()->first < id);
     }
     HVLOG_F(1, "Extend chain with link for view {}", id);
-    suffix_chain_.emplace(id, std::make_unique<SeqnumSuffixLink>(view, sequence_number_id_));
+    suffix_chain_.emplace(id, std::make_unique<SeqnumSuffixLink>(view, sequence_number_id_, metalog_position));
 }
 
 void SeqnumSuffixChain::Trim(uint64_t bound){
@@ -125,6 +125,13 @@ void SeqnumSuffixChain::PollQueryResults(QueryResultVec* results) {
                         pending_query_results_.end());
     }
     pending_query_results_.clear();
+}
+
+void SeqnumSuffixChain::ActivateDiscarding() {
+    (--suffix_chain_.end())->second->ActivateDiscarding();
+}
+void SeqnumSuffixChain::DeactivateDiscarding() {
+    (--suffix_chain_.end())->second->DeactivateDiscarding();
 }
 
 void SeqnumSuffixChain::Aggregate(size_t* link_entries, size_t* range_entries, size_t* size){
@@ -356,12 +363,13 @@ IndexQueryResult SeqnumSuffixChain::BuildInvalidResult(const IndexQuery& query) 
     };
 }
 
-SeqnumSuffixLink::SeqnumSuffixLink(const View* view, uint16_t sequencer_id)
+SeqnumSuffixLink::SeqnumSuffixLink(const View* view, uint16_t sequencer_id, uint32_t metalog_position)
     : LogSpaceBase(LogSpaceBase::kLogSuffix, view, sequencer_id),
       first_metalog_(true)
     {
     log_header_ = fmt::format("SeqnumSuffixLink[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
+    set_metalog_position(metalog_position);
 }
 
 SeqnumSuffixLink::~SeqnumSuffixLink() {}
@@ -387,6 +395,9 @@ bool SeqnumSuffixLink::IsEmpty() {
 }
 void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_shards) {
     DCHECK(!productive_shards.empty());
+    if (discard_) {
+        return;
+    }
     uint32_t seqnum_key = productive_shards.back().second;
     uint16_t highest_productive_shard = productive_shards.back().first;
     HVLOG_F(1, "New logs received. seqnum_key={}, prod_shards={}, highest_prod_shard={}", 
@@ -399,6 +410,13 @@ void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> prod
         std::forward_as_tuple(seqnum_key),
         std::forward_as_tuple(productive_shards)
     );
+}
+
+void SeqnumSuffixLink::ActivateDiscarding() {
+    discard_ = true;
+}
+void SeqnumSuffixLink::DeactivateDiscarding() {
+    discard_ = false;
 }
 
 void SeqnumSuffixLink::Trim(uint64_t bound){

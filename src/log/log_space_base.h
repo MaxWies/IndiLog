@@ -47,6 +47,10 @@ protected:
 
     std::vector<uint16_t> active_storage_shard_ids() { return active_storage_shard_ids_; }
 
+    void set_metalog_position(uint32_t metalog_position){
+        metalog_position_ = metalog_position;
+    }
+
     using OffsetVec = absl::FixedArray<uint32_t>;
     virtual void OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
@@ -75,7 +79,7 @@ private:
     std::vector<MetaLogProto*> applied_metalogs_;
     std::map</* metalog_seqnum */ uint32_t, MetaLogProto*> pending_metalogs_;
 
-    bool first_metalog_; //TODO: in fact only for local indexes allowed
+    bool first_metalog_;
 
     void AdvanceMetaLogProgress();
     bool CanApplyMetaLog(const MetaLogProto& meta_log);

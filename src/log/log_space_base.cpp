@@ -115,12 +115,8 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             continue;
         }
         MetaLogProto* meta_log = iter->second;
-        if (!first_metalog_){ //hack for local indexes
-            if (!CanApplyMetaLog(*meta_log)){
-                break;
-            }
-        } else {
-            HVLOG(1) << "First metalog ever";
+        if (!CanApplyMetaLog(*meta_log)){
+            break;
         }
         ConsiderStorageShardChange(*meta_log);
         first_metalog_ = false;
@@ -179,12 +175,18 @@ bool LogSpaceBase::CanApplyMetaLog(const MetaLogProto& meta_log) {
 
 void LogSpaceBase::ConsiderStorageShardChange(const MetaLogProto& meta_log){
     if(meta_log.storage_shard_change() || first_metalog_){
-        HVLOG(1) << "Storage shard change: Update active storage shards";
+        if (first_metalog_){
+            HVLOG(1) << "First metalog ever";
+        }
         active_storage_shard_ids_.clear();
         for (uint32_t storage_shard_id : meta_log.active_storage_shard_ids()){
             uint16_t shard_id = gsl::narrow_cast<uint16_t>(storage_shard_id);
             active_storage_shard_ids_.push_back(shard_id);
         }
+        HVLOG_F(1, "Storage shard change for metalog_position={}: Update active storage shards to {}", 
+            meta_log.metalog_seqnum(),
+            active_storage_shard_ids_.size()
+        );
     }
 }
 

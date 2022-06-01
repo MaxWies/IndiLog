@@ -19,9 +19,14 @@ public:
     void Aggregate(size_t* num_seqnums, size_t* size);
     IndexQueryResult MakeQuery(const IndexQuery& query);
 
+    void ActivateDiscarding();
+    void DeactivateDiscarding();
+
 private:
     std::unique_ptr<tkrzw::CacheDBM> dbm_;
     std::string log_header_;
+
+    bool discard_;
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint64_t seqnum, uint16_t storage_shard_id);
     IndexQueryResult BuildNotFoundResult(const IndexQuery& query);

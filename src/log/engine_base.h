@@ -111,6 +111,21 @@ protected:
 
     bool SendRegistrationRequest(uint16_t destination_id, protocol::ConnType connection_type, protocol::SharedLogMessage* message);
 
+    void OnActivationZNodeCreated(std::string_view path, std::span<const char> contents);
+    virtual void OnActivateCaching() = 0;
+    void SetMissedView(const View* view) {
+        missed_view_ = view;
+    }
+
+    bool postpone_registration(){
+        absl::ReaderMutexLock fn_ctx_lk(&fn_ctx_mu_);
+        return postpone_registration_;
+    }
+    bool postpone_caching(){
+        absl::ReaderMutexLock fn_ctx_lk(&fn_ctx_mu_);
+        return postpone_caching_;
+    }
+
     server::IOWorker* SomeIOWorker();
 
 #ifdef __FAAS_STAT_THREAD
@@ -162,6 +177,9 @@ private:
     engine::Engine* engine_;
 
     ViewWatcher view_watcher_;
+    const View* missed_view_;
+
+    std::optional<zk_utils::DirWatcher> activation_watcher_;
 
     utils::ThreadSafeObjectPool<LocalOp> log_op_pool_;
     std::atomic<uint64_t> next_local_op_id_;
@@ -175,6 +193,9 @@ private:
     absl::Mutex fn_ctx_mu_;
     absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>
         fn_call_ctx_ ABSL_GUARDED_BY(fn_ctx_mu_);
+
+    bool postpone_registration_ ABSL_GUARDED_BY(fn_ctx_mu_);
+    bool postpone_caching_ ABSL_GUARDED_BY(fn_ctx_mu_);
 
     std::optional<LRUCache> log_cache_;
 

@@ -21,6 +21,9 @@ ABSL_FLAG(int, slog_engine_seqnum_suffix_cap, 100000, "");
 ABSL_FLAG(int, slog_engine_tag_cache_cap, 1000000, "");
 ABSL_FLAG(int, slog_engine_per_tag_seqnums_limit, 10000, "");
 
+ABSL_FLAG(bool, slog_engine_postpone_registration, false, "");
+ABSL_FLAG(bool, slog_engine_postpone_caching, false, "");
+
 ABSL_FLAG(int, slog_storage_cache_cap_mb, 1024, "");
 ABSL_FLAG(std::string, slog_storage_backend, "rocksdb",
           "rocskdb, tkrzw_hash, tkrzw_tree, or tkrzw_skip");

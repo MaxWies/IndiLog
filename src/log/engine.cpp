@@ -60,6 +60,9 @@ Engine::Engine(engine::Engine* engine)
               if(absl::GetFlag(FLAGS_slog_engine_distributed_indexing)){
                   indexing_strategy_ = IndexingStrategy::DISTRIBUTED;
                   seqnum_cache_.emplace(1000);
+                  if(postpone_caching()){
+                      seqnum_cache_->ActivateDiscarding();
+                  }
               } else {
                   indexing_strategy_ = IndexingStrategy::COMPLETE;
               }
@@ -70,6 +73,12 @@ Engine::~Engine() {}
 
 void Engine::OnViewCreated(const View* view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
+    if (postpone_registration()){
+        HLOG_F(INFO, "Store view {} to connect later", view->id());
+        SetMissedView(view);
+        log_header_ = fmt::format("LogEngine[{}-{}]: ", my_node_id(), "Postpone");
+        return;
+    }
     HLOG_F(INFO, "New view {} created", view->id());
     {
         absl::MutexLock view_lk(&view_mu_);
@@ -225,6 +234,27 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     }
 }
 
+void Engine::OnActivateCaching(){
+    absl::ReaderMutexLock view_lk(&view_mu_);
+    if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED){
+        suffix_chain_collection_.ForEachLogSpace(
+            [&] (uint32_t id, LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
+                auto ptr = suffix_chain_ptr.Lock();
+                ptr->DeactivateDiscarding();
+            }
+        );
+        if(seqnum_cache_.has_value()){
+            seqnum_cache_->DeactivateDiscarding();
+        }
+        tag_cache_collection_.ForEachLogSpace(
+            [&] (uint32_t id, LockablePtr<TagCache> tag_cache_ptr) {
+                auto ptr = tag_cache_ptr.Lock();
+                ptr->DeactivateDiscarding();
+            }
+        );
+    }
+}
+
 namespace {
 static Message BuildLocalReadOKResponse(uint64_t seqnum,
                                         std::span<const uint64_t> user_tags,
@@ -251,10 +281,15 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
 
 // Start handlers for local requests (from functions)
 
-#define IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(LOGSPACE_ID)                       \
+#define IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(LOGSPACE_ID, METALOG_POSITION)                       \
     do {                                                             \
         if (!view_mutable_.GetMyStorageShards().contains(LOGSPACE_ID)) { \
-            HLOG(INFO) << "No connection to logspace " << LOGSPACE_ID;                  \
+            HLOG(INFO) << "No connection to logspace " << LOGSPACE_ID; \
+            uint32_t current_max;   \
+            if(max_metalog_position_.contains(LOGSPACE_ID)) {   \
+                current_max = max_metalog_position_[LOGSPACE_ID];   \
+            }   \
+            max_metalog_position_[LOGSPACE_ID] = std::max(current_max, METALOG_POSITION); \
             return;                                                  \
         }                                                            \
     } while (0)
@@ -413,11 +448,13 @@ void Engine::HandleLocalRead(LocalOp* op) {
             storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
         }
         view_id = current_view_->id();
-        if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
-            suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
-            tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
-        } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
-            index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+        if (storage_shard != nullptr){
+            if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+                suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
+                tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
+            } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
+                index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+            }
         }
     }
     if (storage_shard == nullptr){
@@ -562,9 +599,9 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
     Index::QueryResultVec local_index_misses;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
+        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, metalogs_proto.metalogs().at(metalogs_proto.metalogs_size()-1).metalog_seqnum());
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         IGNORE_IF_FROM_PAST_VIEW(message);
-        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
         auto producer_ptr = producer_collection_.GetLogSpaceChecked(message.logspace_id);
         {
             auto locked_producer = producer_ptr.Lock();
@@ -623,8 +660,16 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     Index::QueryResultVec local_index_misses;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
+        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
-        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id);
+        // if (!view_mutable_.GetMyStorageShards().contains(message.logspace_id)) {
+        //     uint32_t current_max;
+        //     if(max_index_metalog_position_.contains(message.logspace_id)) {
+        //         current_max = max_index_metalog_position_[message.logspace_id];
+        //     }
+        //     max_index_metalog_position_[message.logspace_id] = std::max(current_max, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
+        //     return;
+        // }
         DCHECK(message.view_id < views_.size());
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             // feed tag cache
@@ -739,6 +784,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         } else if (result == SharedLogResultType::INDEX_MIN_OK) {
             DCHECK(message.query_seqnum == 0);
             absl::ReaderMutexLock view_lk(&view_mu_);
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, uint32_t(0));
             LockablePtr<TagCache> tag_cache_ptr;
             {
                 tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
@@ -838,8 +884,8 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
     else if (result == protocol::SharedLogResultType::REGISTER_UNBLOCK){
         // registration finished
         DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
-        HLOG_F(INFO, "Registration finished for sequencer_node={}, unblocked shard_id={}, local_start_id={}", 
-            received_message.origin_node_id, received_message.shard_id, received_message.local_start_id
+        HLOG_F(INFO, "Registration finished for sequencer_node={}, unblocked shard_id={}, local_start_id={}, metalog_position={}", 
+            received_message.origin_node_id, received_message.shard_id, received_message.local_start_id, received_message.metalog_position
         );
         const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id));
         view_mutable_.UpdateMyStorageShards(logspace_id, storage_shard);
@@ -847,6 +893,14 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
         producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, received_message.local_start_id));
+        uint32_t metalog_position = received_message.metalog_position;
+        // uint32_t index_metalog_position = 0;
+        if (max_metalog_position_.contains(received_message.logspace_id)){
+            metalog_position = std::max(metalog_position, max_metalog_position_.at(received_message.logspace_id));
+        }
+        // if (max_index_metalog_position_.contains(received_message.logspace_id)){
+        //     index_metalog_position = max_index_metalog_position_.at(received_message.logspace_id);
+        // }
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             if(!suffix_chain_collection_.LogSpaceExists(received_message.sequencer_id)){
                 suffix_chain_collection_.InstallLogSpace(std::make_unique<SeqnumSuffixChain>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_seqnum_suffix_cap), 0.2));
@@ -854,7 +908,10 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             auto suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(received_message.sequencer_id);
             {
                 auto locked_suffix_chain = suffix_chain_ptr.Lock();
-                locked_suffix_chain->Extend(current_view_);
+                locked_suffix_chain->Extend(current_view_, metalog_position);
+                if(postpone_caching()){
+                    locked_suffix_chain->ActivateDiscarding();
+                }
             }
             if(!tag_cache_collection_.LogSpaceExists(received_message.sequencer_id)){
                 tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(
@@ -866,7 +923,10 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(received_message.sequencer_id);
             {
                 auto locked_tag_cache_ptr = tag_cache_ptr.Lock();
-                locked_tag_cache_ptr->InstallView(current_view_->id());
+                locked_tag_cache_ptr->InstallView(current_view_->id(), metalog_position);
+                if(postpone_caching()){
+                    locked_tag_cache_ptr->ActivateDiscarding();
+                }
             }
             // seq cache is built in constructor and physical log independent
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {

@@ -5,11 +5,19 @@
 namespace faas {
 namespace log {
 
-struct TagSuffixLink {
-    std::vector<uint32_t> seqnums;
-    std::vector<uint16_t> storage_shard_ids;
+class TagSuffixLink {
+public:
+    TagSuffixLink(uint32_t seqnum, uint16_t storage_shard_id);
+    bool FindPrev(uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id) const;
+    void GetTail(uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id) const;
+    bool FindNext(uint32_t identifier, uint64_t query_seqnum, uint64_t* seqnum, uint16_t* shard_id) const;
+    void GetHead(uint32_t identifier, uint64_t* seqnum, uint16_t* shard_id) const;
+    std::vector<uint32_t> seqnums_;
+    std::vector<uint16_t> storage_shard_ids_;
+private:
 };
-using TagSuffix = std::map<uint16_t, TagSuffixLink>;
+
+using TagSuffix = std::map<uint16_t, std::unique_ptr<TagSuffixLink>>;
 
 class TagEntry{
 
@@ -21,6 +29,8 @@ public:
 
     void Add(uint16_t view_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
     void Evict(uint32_t per_tag_seqnums_limit, size_t* num_evicted_seqnums);
+    void GetSuffixHead(uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id) const;
+    void GetSuffixTail(uint16_t sequencer_id, uint64_t* seqnum, uint16_t* shard_id) const;
     size_t NumSeqnumsInSuffix();
 
     TagSuffix tag_suffix_;
@@ -43,14 +53,13 @@ public:
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
     void Evict(uint64_t popularity, uint32_t per_tag_seqnums_limit, size_t* evicted_seqnums);
-    void UpdatePopularity(uint64_t tag, uint64_t popularity);
     bool TagExists(uint64_t tag);
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
 
     IndexQueryResult::State FindPrev(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
-                                     uint64_t* seqnum, uint16_t* engine_id) const;
+                                     uint64_t* seqnum, uint16_t* engine_id);
     IndexQueryResult::State FindNext(uint64_t query_seqnum, uint64_t user_tag, uint16_t space_id, uint64_t popularity,
-                                     uint64_t* seqnum, uint16_t* engine_id) const;
+                                     uint64_t* seqnum, uint16_t* engine_id);
 
 private:
     uint32_t user_logspace_;
@@ -64,7 +73,7 @@ private:
 
 class TagCacheView {
 public:
-    TagCacheView(uint16_t view_id);
+    TagCacheView(uint16_t view_id, uint32_t metalog_position);
     ~TagCacheView();
 
     bool CheckIfNewIndexData(const IndexDataProto& index_data);
@@ -77,6 +86,7 @@ private:
     uint16_t view_id_;
     std::string log_header_;
     uint32_t metalog_position_;
+    bool first_metalog_;
     absl::flat_hash_map<uint32_t /* metalog_position */, std::pair<size_t, absl::flat_hash_set<uint16_t>>> storage_shards_index_updates_;
     absl::flat_hash_map<uint32_t /* metalog_position */, uint32_t> end_seqnum_positions_;
 };
@@ -96,8 +106,11 @@ public:
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
     bool TagExists(uint32_t user_logspace, uint64_t tag);
-    void InstallView(uint16_t view_id);
+    void InstallView(uint16_t view_id, uint32_t metalog_position);
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
+
+    void ActivateDiscarding();
+    void DeactivateDiscarding();
 
     uint32_t identifier(){
         return bits::JoinTwo16(0, sequencer_id_);
@@ -127,6 +140,8 @@ private:
     size_t max_cache_size_;
     uint32_t per_tag_seqnums_limit_;
     size_t cache_size_;
+    bool discard_;
+
     std::vector<uint64_t> popularity_sequence_;
 
     static constexpr uint32_t kMaxMetalogPosition = std::numeric_limits<uint32_t>::max();

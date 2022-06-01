@@ -24,16 +24,12 @@ using server::NodeWatcher;
 IndexBase::IndexBase(uint16_t node_id)
     : ServerBase(node_id, fmt::format("index_{}", node_id), NodeType::kIndexNode),
       node_id_(node_id) {}
-      //   db_(nullptr),
-      //background_thread_("BG", [this] { this->BackgroundThreadMain(); }) 
 
 IndexBase::~IndexBase() {}
 
 void IndexBase::StartInternal() {
     SetupZKWatchers();
     SetupTimers();
-    // log_cache_.emplace(absl::GetFlag(FLAGS_slog_storage_cache_cap_mb));
-    // background_thread_.Start();
 }
 
 void IndexBase::StopInternal() {}
