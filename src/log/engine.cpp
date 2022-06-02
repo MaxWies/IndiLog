@@ -60,9 +60,6 @@ Engine::Engine(engine::Engine* engine)
               if(absl::GetFlag(FLAGS_slog_engine_distributed_indexing)){
                   indexing_strategy_ = IndexingStrategy::DISTRIBUTED;
                   seqnum_cache_.emplace(1000);
-                  if(postpone_caching()){
-                      seqnum_cache_->ActivateDiscarding();
-                  }
               } else {
                   indexing_strategy_ = IndexingStrategy::COMPLETE;
               }
@@ -240,16 +237,13 @@ void Engine::OnActivateCaching(){
         suffix_chain_collection_.ForEachLogSpace(
             [&] (uint32_t id, LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
                 auto ptr = suffix_chain_ptr.Lock();
-                ptr->DeactivateDiscarding();
+                ptr->Clear();
             }
         );
-        if(seqnum_cache_.has_value()){
-            seqnum_cache_->DeactivateDiscarding();
-        }
         tag_cache_collection_.ForEachLogSpace(
             [&] (uint32_t id, LockablePtr<TagCache> tag_cache_ptr) {
                 auto ptr = tag_cache_ptr.Lock();
-                ptr->DeactivateDiscarding();
+                ptr->Clear();
             }
         );
     }
@@ -285,7 +279,7 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
     do {                                                             \
         if (!view_mutable_.GetMyStorageShards().contains(LOGSPACE_ID)) { \
             HLOG(INFO) << "No connection to logspace " << LOGSPACE_ID; \
-            uint32_t current_max;   \
+            uint32_t current_max = 0;   \
             if(max_metalog_position_.contains(LOGSPACE_ID)) {   \
                 current_max = max_metalog_position_[LOGSPACE_ID];   \
             }   \
@@ -363,9 +357,12 @@ void Engine::HandleLocalAppend(LocalOp* op) {
                 }
             }
         }
+        if (0 < next_seqnum) {
+            --next_seqnum; // get the tail
+        }
         for (uint64_t tag : tags_without_min_seqnum) {
             HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
-            HandleIndexTierMinSeqnumRead(op, tag, view->id(), std::min(uint64_t(0), next_seqnum - 1), storage_shard); // next_seqnum - 1 is the tail
+            HandleIndexTierMinSeqnumRead(op, tag, view->id(), next_seqnum, storage_shard);
         }
         ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
     }
@@ -784,7 +781,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         } else if (result == SharedLogResultType::INDEX_MIN_OK) {
             DCHECK(message.query_seqnum == 0);
             absl::ReaderMutexLock view_lk(&view_mu_);
-            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, uint32_t(0));
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, gsl::narrow_cast<uint32_t>(0));
             LockablePtr<TagCache> tag_cache_ptr;
             {
                 tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
@@ -892,7 +889,6 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         uint32_t local_start_id = view_mutable_.GetLocalStartOfConnection(received_message.logspace_id);
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
-        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, received_message.local_start_id));
         uint32_t metalog_position = received_message.metalog_position;
         // uint32_t index_metalog_position = 0;
         if (max_metalog_position_.contains(received_message.logspace_id)){
@@ -901,6 +897,8 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         // if (max_index_metalog_position_.contains(received_message.logspace_id)){
         //     index_metalog_position = max_index_metalog_position_.at(received_message.logspace_id);
         // }
+        HVLOG_F(1, "Init with metalog_position={}", metalog_position);
+        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, metalog_position, received_message.local_start_id));
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             if(!suffix_chain_collection_.LogSpaceExists(received_message.sequencer_id)){
                 suffix_chain_collection_.InstallLogSpace(std::make_unique<SeqnumSuffixChain>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_seqnum_suffix_cap), 0.2));
@@ -909,9 +907,6 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             {
                 auto locked_suffix_chain = suffix_chain_ptr.Lock();
                 locked_suffix_chain->Extend(current_view_, metalog_position);
-                if(postpone_caching()){
-                    locked_suffix_chain->ActivateDiscarding();
-                }
             }
             if(!tag_cache_collection_.LogSpaceExists(received_message.sequencer_id)){
                 tag_cache_collection_.InstallLogSpace(std::make_unique<TagCache>(
@@ -924,9 +919,6 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             {
                 auto locked_tag_cache_ptr = tag_cache_ptr.Lock();
                 locked_tag_cache_ptr->InstallView(current_view_->id(), metalog_position);
-                if(postpone_caching()){
-                    locked_tag_cache_ptr->ActivateDiscarding();
-                }
             }
             // seq cache is built in constructor and physical log independent
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
@@ -936,6 +928,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         std::vector<SharedLogRequest> ready_requests;
         future_requests_.OnNewView(current_view_, &ready_requests);
         current_view_active_ = true;
+        registered();
         HLOG(INFO) << "Current view active. Vamos!";
         if (!ready_requests.empty()) {
             HLOG_F(INFO, "{} requests for the new view", ready_requests.size());

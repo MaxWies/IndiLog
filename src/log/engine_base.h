@@ -126,6 +126,12 @@ protected:
         return postpone_caching_;
     }
 
+    void registered(){
+        absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+        postpone_registration_ = false;
+        registered_ = true;
+    }
+
     server::IOWorker* SomeIOWorker();
 
 #ifdef __FAAS_STAT_THREAD
@@ -194,6 +200,7 @@ private:
     absl::flat_hash_map</* full_call_id */ uint64_t, FnCallContext>
         fn_call_ctx_ ABSL_GUARDED_BY(fn_ctx_mu_);
 
+    bool registered_ ABSL_GUARDED_BY(fn_ctx_mu_);
     bool postpone_registration_ ABSL_GUARDED_BY(fn_ctx_mu_);
     bool postpone_caching_ ABSL_GUARDED_BY(fn_ctx_mu_);
 

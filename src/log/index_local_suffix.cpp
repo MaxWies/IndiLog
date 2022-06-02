@@ -26,30 +26,15 @@ void SeqnumSuffixChain::Extend(const View* view, uint32_t metalog_position){
     suffix_chain_.emplace(id, std::make_unique<SeqnumSuffixLink>(view, sequence_number_id_, metalog_position));
 }
 
-void SeqnumSuffixChain::Trim(uint64_t bound){
-    uint16_t view_id = bits::HighHalf32(bits::HighHalf64(bound));
-    DCHECK_EQ(sequence_number_id_, bits::LowHalf32(bits::HighHalf64(bound)));
-    if (IsEmpty()){
-        return;
+void SeqnumSuffixChain::Clear(){
+    for (auto& [id, chain_member] : suffix_chain_) {
+        chain_member->Clear();
     }
-    // remove older views
-    auto it = suffix_chain_.begin();
-    while(it != suffix_chain_.end()){
-        if (it->first <= view_id){
-            break;
-        }
-        it = suffix_chain_.erase(it);
-    }
-    if(view_id < it->first){
-        // view gap possible
-        return;
-    }
-    // remove entries within view
-    suffix_chain_.at(view_id)->Trim(bound);
+    current_entries_ = 0;
 }
 
 void SeqnumSuffixChain::Trim(size_t* counter){
-    DCHECK(!IsEmpty());
+    DCHECK(!suffix_chain_.empty());
     HVLOG_F(1, "Trim {} entries from chain", *counter);
     auto it = suffix_chain_.begin();
     while(it != suffix_chain_.end()){
@@ -67,11 +52,13 @@ void SeqnumSuffixChain::Trim(size_t* counter){
 }
 
 void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
-    if (IsEmpty()){
+    if(suffix_chain_.empty()){
+        HLOG(WARNING) << "Chain has no links";
         return;
     }
-    (--suffix_chain_.end())->second->ProvideMetaLog(metalog_proto);
-    current_entries_++;
+    if((--suffix_chain_.end())->second->ProvideMetaLog(metalog_proto)){
+        current_entries_++;
+    }
     auto iter = pending_queries_.begin();
     while (iter != pending_queries_.end()) {
         if (iter->first > metalog_position()) {
@@ -127,13 +114,6 @@ void SeqnumSuffixChain::PollQueryResults(QueryResultVec* results) {
     pending_query_results_.clear();
 }
 
-void SeqnumSuffixChain::ActivateDiscarding() {
-    (--suffix_chain_.end())->second->ActivateDiscarding();
-}
-void SeqnumSuffixChain::DeactivateDiscarding() {
-    (--suffix_chain_.end())->second->DeactivateDiscarding();
-}
-
 void SeqnumSuffixChain::Aggregate(size_t* link_entries, size_t* range_entries, size_t* size){
     for (const auto& chain_member : suffix_chain_){
         chain_member.second->Aggregate(link_entries, range_entries, size);      // member
@@ -182,10 +162,6 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
     uint16_t storage_shard_id;
     HVLOG_F(1, "SuffixRead: ProcessReadNext: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    if (IsEmpty()){
-        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
-        return BuildNotFoundResult(query);
-    }
     // check if seqnum lies at head, left next to it or before
     if (GetHead(&seqnum, &storage_shard_id)){
         if (query.query_seqnum == seqnum){
@@ -196,6 +172,9 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
             HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
             return BuildNotFoundResult(query);
         }
+    } else {
+        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
+        return BuildNotFoundResult(query);
     }
     // check if seqnum lies at tail or after tail in future
     if (GetTail(&seqnum, &storage_shard_id)){
@@ -261,10 +240,6 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
     uint16_t storage_shard_id;
     HVLOG_F(1, "SuffixRead: ProcessReadPrev: seqnum={}, logspace={}, tag={}",
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
-    if (IsEmpty()) {
-        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
-        return BuildNotFoundResult(query);
-    }
     // check if seqnum lies at head, left next to it or before
     if (GetHead(&seqnum, &storage_shard_id)){
         if (query.query_seqnum == seqnum){
@@ -275,6 +250,9 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
             HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
             return BuildNotFoundResult(query);
         }
+    } else {
+        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
+        return BuildNotFoundResult(query);
     }
     // check if seqnum lies after tail
     if (GetTail(&seqnum, &storage_shard_id)){
@@ -395,9 +373,6 @@ bool SeqnumSuffixLink::IsEmpty() {
 }
 void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_shards) {
     DCHECK(!productive_shards.empty());
-    if (discard_) {
-        return;
-    }
     uint32_t seqnum_key = productive_shards.back().second;
     uint16_t highest_productive_shard = productive_shards.back().first;
     HVLOG_F(1, "New logs received. seqnum_key={}, prod_shards={}, highest_prod_shard={}", 
@@ -412,31 +387,12 @@ void SeqnumSuffixLink::OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> prod
     );
 }
 
-void SeqnumSuffixLink::ActivateDiscarding() {
-    discard_ = true;
-}
-void SeqnumSuffixLink::DeactivateDiscarding() {
-    discard_ = false;
-}
-
-void SeqnumSuffixLink::Trim(uint64_t bound){
-    if (IsEmpty()){
-        return;
-    }
-    DCHECK_EQ(bits::HighHalf32(bound), identifier());
-    uint32_t local_bound = bits::LowHalf64(bound);
-    // remove entries with keys until bound
-    auto it = entries_.begin();
-    while(it != entries_.end()){
-        if (local_bound < it->first){
-            break;
-        }
-        it = entries_.erase(it);
-    }
+void SeqnumSuffixLink::Clear(){
+    entries_.clear();
 }
 
 void SeqnumSuffixLink::Trim(size_t* counter){
-    if (IsEmpty()){
+    if (entries_.empty()){
         return;
     }
     HVLOG_F(1, "Trim at most {} entries", *counter);

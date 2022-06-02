@@ -192,10 +192,11 @@ MetaLogBackup::MetaLogBackup(const View* view, uint16_t sequencer_id)
 
 MetaLogBackup::~MetaLogBackup() {}
 
-LogProducer::LogProducer(uint16_t storage_shard_id, const View* view, uint16_t sequencer_id, uint32_t next_start_id)
+LogProducer::LogProducer(uint16_t storage_shard_id, const View* view, uint16_t sequencer_id, uint32_t metalog_position, uint32_t next_start_id)
     : LogSpaceBase(LogSpaceBase::kLogProducer, view, sequencer_id),
       next_localid_(bits::JoinTwo32(storage_shard_id, next_start_id)) {
     AddInterestedShard(storage_shard_id);
+    set_metalog_position(metalog_position);
     log_header_ = fmt::format("LogProducer[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }

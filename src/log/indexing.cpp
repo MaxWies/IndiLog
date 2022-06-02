@@ -422,7 +422,7 @@ void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
         } else {
             // send response to engine node
             HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", 
-                query_result.original_query.user_tag, query_result.found_result.seqnum, query_result.original_query.origin_node_id
+                query_result.original_query.user_tag, bits::HexStr0x(query_result.found_result.seqnum), query_result.original_query.origin_node_id
             );
             uint32_t logspace_id;
             {
@@ -581,7 +581,7 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
         index_query.prev_found_result = IndexFoundResult {
             .view_id = 0,
             .storage_shard_id = 0,
-            .seqnum = 0
+            .seqnum = kInvalidLogSeqNum
         };
     }
     return index_query;

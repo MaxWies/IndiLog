@@ -31,9 +31,41 @@ EngineBase::EngineBase(engine::Engine* engine)
     : node_id_(engine->node_id_),
       engine_(engine),
       next_local_op_id_(0),
-      postpone_registration_(absl::GetFlag(FLAGS_slog_engine_postpone_registration)),
-      postpone_caching_(absl::GetFlag(FLAGS_slog_engine_postpone_caching)) 
-      {}
+      registered_(false) 
+      {
+          if (absl::GetFlag(FLAGS_slog_engine_postpone_registration) != ""){
+              std::vector<int> v;
+              std::stringstream ss(absl::GetFlag(FLAGS_slog_engine_postpone_registration));
+              for (int i; ss >> i;) {
+                  v.push_back(i);
+                  if (ss.peek() == ',') {
+                      ss.ignore();
+                  }
+              }
+              for (int i : v) {
+                  if (node_id_ % i == 0) {
+                      postpone_registration_ = true;
+                      HLOG_F(INFO, "I will postpone registration. my_node_id={}, arg={}", node_id_, i);
+                  }
+              }
+          }
+          if (absl::GetFlag(FLAGS_slog_engine_postpone_caching) != ""){
+              std::vector<int> v;
+              std::stringstream ss(absl::GetFlag(FLAGS_slog_engine_postpone_caching));
+              for (int i; ss >> i;) {
+                  v.push_back(i);
+                  if (ss.peek() == ',') {
+                      ss.ignore();
+                  }
+              }
+              for (int i : v) {
+                  if (node_id_ % i == 0) {
+                      postpone_caching_ = true;
+                      HLOG_F(INFO, "I will postpone caching. my_node_id={}, arg={}", node_id_, i);
+                  }
+              }
+          }
+      }
 
 EngineBase::~EngineBase() {}
 
@@ -197,10 +229,31 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
             return;
         }
         ctx = fn_call_ctx_.at(func_call.full_call_id);
-        if (postpone_caching_ || postpone_registration_) {
+        if (postpone_caching_ || !registered_) {
+            // return ok if engine is postponed
+            SharedLogResultType result; 
+            switch(MessageHelper::GetSharedLogOpType(message)){
+                case SharedLogOpType::APPEND:
+                    result = SharedLogResultType::APPEND_OK;
+                    break;
+                case SharedLogOpType::READ_NEXT:
+                case SharedLogOpType::READ_PREV:
+                case SharedLogOpType::READ_NEXT_B:
+                    result = SharedLogResultType::READ_OK;
+                    break;
+                case SharedLogOpType::TRIM:
+                    result = SharedLogResultType::TRIM_OK;
+                    break;
+                case SharedLogOpType::SET_AUXDATA:
+                    result = SharedLogResultType::AUXDATA_OK;
+                    break;
+                default:
+                    UNREACHABLE(); 
+            }
             Message response = MessageHelper::NewSharedLogOpSucceeded(
-                SharedLogResultType::POSTPONE_OK, kInvalidLogSeqNum
+                result, kInvalidLogSeqNum
             );
+            response.log_client_data = message.log_client_data;
             engine_->SendFuncWorkerMessage(message.log_client_id, &response);
             return;
         }
@@ -455,8 +508,8 @@ bool EngineBase::SendRegistrationRequest(uint16_t destination_id, protocol::Conn
 
 void EngineBase::OnActivationZNodeCreated(std::string_view path,
                                    std::span<const char> contents) {
+    HLOG(INFO) << "Received activation command";
     if (path == "register") {
-        HLOG(INFO) << "Received activation command";
         {
             absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
             if (!postpone_registration_) {
@@ -465,17 +518,26 @@ void EngineBase::OnActivationZNodeCreated(std::string_view path,
             }
             postpone_registration_ = false;
         }
-        OnViewCreated(missed_view_);
+        if (this->missed_view_ == nullptr) {
+            HLOG(WARNING) << "No view yet";
+            return;
+        }
+        SomeIOWorker()->ScheduleFunction(
+            nullptr, [this] {
+                OnViewCreated(this->missed_view_);
+            }
+        );
     } else if (path == "cache") {
         {
-            absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+            absl::ReaderMutexLock fn_ctx_lk(&fn_ctx_mu_);
             if (!postpone_caching_) {
                 // already does caching
                 return;
             }
-            postpone_caching_ = false;
         }
         OnActivateCaching();
+        absl::MutexLock fn_ctx_lk(&fn_ctx_mu_);
+        postpone_caching_ = false;
     } else {
         HLOG(ERROR) << "Unknown command: " << path;
     }

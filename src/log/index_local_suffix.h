@@ -50,7 +50,7 @@ public:
     SeqnumSuffixLink(const View* view, uint16_t sequencer_id, uint32_t metalog_position);
     ~SeqnumSuffixLink();
 
-    void Trim(uint64_t bound);
+    void Clear();
     void Trim(size_t* counter);
     bool IsEmpty();
 
@@ -63,9 +63,6 @@ public:
     bool FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_t* storage_shard_id);
     bool FindPrev(uint64_t query_seqnum, uint64_t* seqnum, uint16_t* storage_shard_id);
 
-    void ActivateDiscarding();
-    void DeactivateDiscarding();
-
     uint64_t metalog_progress() const {
         return bits::JoinTwo32(identifier(), metalog_position());
     }
@@ -74,7 +71,6 @@ private:
     std::map<uint32_t, LinkEntry> entries_;
 
     bool first_metalog_;
-    bool discard_;
 
     void OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_cuts) override;
     
@@ -108,6 +104,7 @@ public:
     }
 
     void Extend(const View* view, uint32_t metalog_position);
+    void Clear();
     void Trim(uint64_t bound);
     void Trim(size_t* counter);
     //SuffixSeq* GetLast();
@@ -115,9 +112,6 @@ public:
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
     void Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size);
-
-    void ActivateDiscarding();
-    void DeactivateDiscarding();
 
 private:
     uint16_t sequence_number_id_;

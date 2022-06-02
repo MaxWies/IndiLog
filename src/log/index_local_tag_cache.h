@@ -53,6 +53,7 @@ public:
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
     void Evict(uint64_t popularity, uint32_t per_tag_seqnums_limit, size_t* evicted_seqnums);
+    void Clear();
     bool TagExists(uint64_t tag);
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
 
@@ -107,10 +108,8 @@ public:
     void PollQueryResults(QueryResultVec* results);
     bool TagExists(uint32_t user_logspace, uint64_t tag);
     void InstallView(uint16_t view_id, uint32_t metalog_position);
+    void Clear();
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
-
-    void ActivateDiscarding();
-    void DeactivateDiscarding();
 
     uint32_t identifier(){
         return bits::JoinTwo16(0, sequencer_id_);
@@ -140,7 +139,6 @@ private:
     size_t max_cache_size_;
     uint32_t per_tag_seqnums_limit_;
     size_t cache_size_;
-    bool discard_;
 
     std::vector<uint64_t> popularity_sequence_;
 

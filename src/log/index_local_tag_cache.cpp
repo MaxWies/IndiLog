@@ -181,7 +181,7 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
     if (min_seqnum == kInvalidLogSeqNum){
         // the global min seqnum was invalid, thus the tag is new and complete
         HVLOG_F(1, "Tag={} is completely new", tag);
-        if(TagEntryExists(tag)){
+        if(tags_.contains(tag)){
             // head is min
             HVLOG_F(1, "min_seqnum for tag={} is overwritten with head", tag);
             uint64_t min_seqnum;
@@ -202,14 +202,14 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
     } else if (min_seqnum != kInvalidLogSeqNum) {
         // min seqnum exists already
         HVLOG_F(1, "Tag={} exists already", tag);
-        if(TagEntryExists(tag)){
+        if(tags_.contains(tag)){
             TagEntry* tag_entry = tags_.at(tag).get();
             tag_entry->seqnum_min_ = min_seqnum;
             tag_entry->shard_id_min_ = min_storage_shard_id;
         } else {
             if (!pending_min_tags_.contains(tag)){
                 TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ false);
-                tags_[tag].reset(tag_entry);
+                pending_min_tags_[tag].reset(tag_entry);
             }
         }
     } else {
@@ -221,21 +221,9 @@ bool PerSpaceTagCache::TagExists(uint64_t tag){
     return tags_.contains(tag);
 }
 
-void PerSpaceTagCache::Remove(uint64_t tag, uint64_t popularity){
-    if(tags_.at(tag)->popularity_ <= popularity){
-        HVLOG_F(1, "Remove tag {} because its popularity {} is lower|equal than {}", tag, tags_.at(tag)->popularity_, popularity);
-        tags_.erase(tag);
-    }
-}
-
-void PerSpaceTagCache::Remove(uint64_t popularity){
-    auto iter = tags_.begin();
-    while (iter != tags_.end()){
-        if (iter->second->popularity_ <= popularity){
-            tags_.erase(iter);
-        }
-        ++iter;
-    }
+void PerSpaceTagCache::Clear(){
+    tags_.clear();
+    pending_min_tags_.clear();
 }
 
 void PerSpaceTagCache::Evict(uint64_t popularity, uint32_t pet_tag_seqnums_limit, size_t* evicted_seqnums){
@@ -530,8 +518,7 @@ TagCache::TagCache(uint16_t sequencer_id, size_t max_cache_size, uint32_t per_ta
     : sequencer_id_(sequencer_id),
       max_cache_size_(max_cache_size),
       per_tag_seqnums_limit_(per_tag_seqnums_limit),
-      cache_size_(0),
-      discard_(false)
+      cache_size_(0)
     {
         log_header_ = fmt::format("TagCache[{}]: ", sequencer_id);
     }
@@ -607,14 +594,6 @@ void TagCache::Evict(){
     }
 }
 
-void TagCache::ActivateDiscarding() {
-    discard_ = true;
-}
-void TagCache::DeactivateDiscarding() {
-    discard_ = false;
-}
-
-
 bool TagCache::TagExists(uint32_t user_logspace, uint64_t tag){
     return GetOrCreatePerSpaceTagCache(user_logspace)->TagExists(tag);
 }
@@ -624,6 +603,14 @@ void TagCache::InstallView(uint16_t view_id, uint32_t metalog_position){
     TagCacheView* tag_cache_view = new TagCacheView(view_id, metalog_position);
     views_[view_id].reset(tag_cache_view);
     latest_view_id_ = view_id;
+}
+
+void TagCache::Clear(){
+    for (auto& [id, per_space_tag_cache] : per_space_cache_){
+        per_space_tag_cache->Clear();
+    }
+    popularity_sequence_.clear();
+    cache_size_ = 0;
 }
 
 void TagCache::Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size){
@@ -648,19 +635,17 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
                 if (end_seqnum_position <= seqnum){
                     break;
                 }
-                if (!discard_){
-                    const IndexData& index_data = iter->second;
-                    for (uint64_t tag : index_data.user_tags) {
-                        GetOrCreatePerSpaceTagCache(index_data.user_logspace)->AddOrUpdate(
-                            tag,
-                            view_id,
-                            sequencer_id_,
-                            seqnum,
-                            index_data.engine_id,
-                            popularity
-                        );
-                        new_seqnums++;
-                    }
+                const IndexData& index_data = iter->second;
+                for (uint64_t tag : index_data.user_tags) {
+                    GetOrCreatePerSpaceTagCache(index_data.user_logspace)->AddOrUpdate(
+                        tag,
+                        view_id,
+                        sequencer_id_,
+                        seqnum,
+                        index_data.engine_id,
+                        popularity
+                    );
+                    new_seqnums++;
                 }
                 iter = received_data_.erase(iter);
             }
