@@ -3,9 +3,11 @@ package faas
 import (
 	"encoding/binary"
 	"log"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
+	"time"
 
 	config "cs.utexas.edu/zjia/faas/config"
 	ipc "cs.utexas.edu/zjia/faas/ipc"
@@ -29,6 +31,8 @@ func Serve(factory types.FuncHandlerFactory) {
 	if err != nil {
 		log.Fatal("[FATAL] Failed to parse FAAS_MSG_PIPE_FD")
 	}
+
+	rand.Seed(time.Now().UnixNano())
 
 	msgPipe := os.NewFile(uintptr(msgPipeFd), "msg_pipe")
 	payloadSizeBuf := make([]byte, 4)
