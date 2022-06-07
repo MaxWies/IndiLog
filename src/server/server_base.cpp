@@ -179,12 +179,21 @@ void ServerBase::SetupMessageServer() {
         zk::ZKCreateMode::kEphemeral, nullptr);
     CHECK(status.ok()) << fmt::format("Failed to create ZooKeeper node {}: {}",
                                       znode_path, status.ToString());
-    // hack
+    // hack for index engine
     std::string prefix_index_engine = "index_engine_";
     if (absl::StartsWith(node_name_, prefix_index_engine)){
-        //std::string node_id = node_name_.substr(prefix_index_engine.length());
-        //auto a = absl::StripPrefix(node_name_, "index_engine_");
         std::string node_name = fmt::format("engine_{}", node_name_.substr(prefix_index_engine.length()));
+        znode_path = fmt::format("node/{}", node_name);
+        auto status = zk_utils::CreateSync(
+            zk_session(), /* path= */ znode_path, /* value= */ STRING_AS_SPAN(my_addr),
+            zk::ZKCreateMode::kEphemeral, nullptr);
+        CHECK(status.ok()) << fmt::format("Failed to create ZooKeeper node {}: {}",
+                                        znode_path, status.ToString());
+    }
+    // hack for hybrid engine
+    std::string prefix_hybrid_engine = "hybrid_engine_";
+    if (absl::StartsWith(node_name_, prefix_hybrid_engine)){
+        std::string node_name = fmt::format("engine_{}", node_name_.substr(prefix_hybrid_engine.length()));
         znode_path = fmt::format("node/{}", node_name);
         auto status = zk_utils::CreateSync(
             zk_session(), /* path= */ znode_path, /* value= */ STRING_AS_SPAN(my_addr),

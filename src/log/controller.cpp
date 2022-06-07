@@ -131,10 +131,11 @@ void Controller::ReconfigView(const Configuration& configuration) {
         view_proto.add_storage_plan(configuration.storage_nodes.at(i % num_storages));
     }
 
-
-    NodeIdVec index_engines = NodeIdVec(index_nodes_.begin(), index_nodes_.end());
-
-    // index nodes have higher priority
+    // index engine nodes have highest priority
+    NodeIdVec index_engines = NodeIdVec(index_engine_nodes_.begin(), index_engine_nodes_.end());
+    // extend with hybrid
+    index_engines.insert(index_engines.end(), hybrid_engine_nodes_.begin(), hybrid_engine_nodes_.end());
+    // fill with standard engine nodes
     for (size_t i = 0; i < num_engines; i++) {
         uint16_t n = configuration.engine_nodes.at(i % num_engines);
         if(std::find(index_engines.begin(), index_engines.end(), n) == index_engines.end()) {
@@ -235,8 +236,11 @@ void Controller::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id)
     case NodeWatcher::kStorageNode:
         storage_nodes_.insert(node_id);
         break;
-    case NodeWatcher::kIndexNode:
-        index_nodes_.insert(node_id);
+    case NodeWatcher::kIndexEngineNode:
+        index_engine_nodes_.insert(node_id);
+        break;
+    case NodeWatcher::kHybridEngineNode:
+        hybrid_engine_nodes_.insert(node_id);
         break;
     default:
         break;
@@ -254,8 +258,11 @@ void Controller::OnNodeOffline(NodeWatcher::NodeType node_type, uint16_t node_id
     case NodeWatcher::kStorageNode:
         storage_nodes_.erase(node_id);
         break;
-    case NodeWatcher::kIndexNode:
-        index_nodes_.erase(node_id);
+    case NodeWatcher::kIndexEngineNode:
+        index_engine_nodes_.erase(node_id);
+        break;
+    case NodeWatcher::kHybridEngineNode:
+        hybrid_engine_nodes_.erase(node_id);
         break;
     default:
         break;
@@ -289,7 +296,8 @@ void Controller::StartCommandHandler() {
 
     NodeIdVec sequencer_nodes(sequencer_nodes_.begin(), sequencer_nodes_.end());
     NodeIdVec engine_nodes(engine_nodes_.begin(), engine_nodes_.end());
-    NodeIdVec index_nodes(index_nodes_.begin(), index_nodes_.end());
+    NodeIdVec index_engine_nodes(index_engine_nodes_.begin(), index_engine_nodes_.end());
+    NodeIdVec hybrid_engine_nodes(hybrid_engine_nodes_.begin(), hybrid_engine_nodes_.end());
     NodeIdVec storage_nodes(storage_nodes_.begin(), storage_nodes_.end());
 
     log_space_hash_seed_ = hash::xxHash64(rnd_gen_());
@@ -301,16 +309,17 @@ void Controller::StartCommandHandler() {
                  log_space_hash_tokens_.end(),
                  rnd_gen_);
 
-    HLOG_F(INFO, "Create initial view with {} sequencers, {} engines ({} proritized), and {} storages",
-           sequencer_nodes.size(), engine_nodes.size(), index_nodes.size(), storage_nodes.size());
+    HLOG_F(INFO, "Create initial view with {} sequencers, {} engines ({} index_engines, {} hybrid_engines), and {} storages",
+           sequencer_nodes.size(), engine_nodes.size(), index_engine_nodes.size(), hybrid_engine_nodes.size(), storage_nodes.size());
     Configuration configuration = {
         .log_space_hash_seed   = log_space_hash_seed_,
         .log_space_hash_tokens = log_space_hash_tokens_,
-        .num_phylogs     = num_phylogs_,
-        .sequencer_nodes = std::move(sequencer_nodes),
-        .engine_nodes    = std::move(engine_nodes),
-        .index_nodes     = std::move(index_nodes),
-        .storage_nodes   = std::move(storage_nodes),
+        .num_phylogs            = num_phylogs_,
+        .sequencer_nodes        = std::move(sequencer_nodes),
+        .engine_nodes           = std::move(engine_nodes),
+        .index_engine_nodes     = std::move(index_engine_nodes),
+        .hybrid_engine_nodes    = std::move(hybrid_engine_nodes),
+        .storage_nodes          = std::move(storage_nodes),
     };
     ReconfigView(configuration);
 }

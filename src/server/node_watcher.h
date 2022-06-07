@@ -17,12 +17,13 @@ public:
     void StartWatching(zk::ZKSession* session);
 
     enum NodeType {
-        kGatewayNode   = 0,
-        kEngineNode    = 1,
-        kSequencerNode = 2,
-        kStorageNode   = 3,
-        kIndexNode     = 4,
-        kTotalNodeType = 5
+        kGatewayNode        = 0,
+        kEngineNode         = 1,
+        kSequencerNode      = 2,
+        kStorageNode        = 3,
+        kIndexEngineNode    = 4,
+        kHybridEngineNode   = 5,
+        kTotalNodeType      = 6
     };
 
     using NodeEventCallback = std::function<void(NodeType /* node_type */, uint16_t node_id)>;

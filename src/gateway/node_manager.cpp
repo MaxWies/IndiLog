@@ -60,8 +60,9 @@ void NodeManager::FuncCallFinished(const protocol::FuncCall& func_call, uint16_t
 }
 
 void NodeManager::OnNodeOnline(NodeWatcher::NodeType node_type, uint16_t node_id) {
-    // hack
-    if (node_type != NodeWatcher::kEngineNode || 1000 <= node_id) {
+    // the node manager can only see 'standard' engine nodes here
+    // 1000 is hack for (remote) engine nodes to not run function. In docker compose the node id must be equal|higher than 1000
+    if ((node_type != NodeWatcher::kEngineNode) || 1000 <= node_id) {
         return;
     }
     std::unique_ptr<Node> node = std::make_unique<Node>(node_id);

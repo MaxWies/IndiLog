@@ -55,7 +55,10 @@ bool NodeWatcher::ParseNodePath(std::string_view path,
         *node_type = kStorageNode;
     } else if (absl::StartsWith(path, "index_engine_")) {
         prefix = "index_engine_";
-        *node_type = kIndexNode;
+        *node_type = kIndexEngineNode;
+    } else if (absl::StartsWith(path, "hybrid_engine_")) {
+        prefix = "hybrid_engine_";
+        *node_type = kHybridEngineNode;
     }
     else {
         LOG(ERROR) << "Unknown type of node: " << path;

@@ -16,7 +16,7 @@ ABSL_FLAG(std::string, root_path_for_ipc, "/dev/shm/faas_ipc",
           "Root directory for IPCs used by FaaS");
 ABSL_FLAG(std::string, func_config_file, "", "Path to function config file");
 ABSL_FLAG(bool, enable_shared_log, false, "If to enable shared log.");
-ABSL_FLAG(std::string, engine_node_type, "engine", "Engine type. Supported: engine, index_engine");
+ABSL_FLAG(std::string, engine_node_type, "engine", "Engine type. Supported: engine, index_engine, hybrid_engine");
 
 namespace faas {
 

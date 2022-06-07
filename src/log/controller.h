@@ -49,7 +49,8 @@ private:
 
     std::set</* node_id */ uint16_t> sequencer_nodes_;
     std::set</* node_id */ uint16_t> engine_nodes_;
-    std::set</* node_id */ uint16_t> index_nodes_;
+    std::set</* node_id */ uint16_t> index_engine_nodes_;
+    std::set</* node_id */ uint16_t> hybrid_engine_nodes_;
     std::set</* node_id */ uint16_t> storage_nodes_;
 
     std::vector<std::unique_ptr<View>> views_;
@@ -62,7 +63,8 @@ private:
         size_t    num_phylogs;
         NodeIdVec sequencer_nodes;
         NodeIdVec engine_nodes;
-        NodeIdVec index_nodes;
+        NodeIdVec index_engine_nodes;
+        NodeIdVec hybrid_engine_nodes;
         NodeIdVec storage_nodes;
     };
     std::optional<Configuration> pending_reconfig_;

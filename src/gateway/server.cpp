@@ -553,7 +553,7 @@ void Server::OnNewGrpcConnection(int sockfd) {
 server::EgressHub* Server::CreateEngineEgressHub(uint16_t node_id, 
                                                  server::IOWorker* io_worker) {
     struct sockaddr_in addr;
-    if (!node_watcher()->GetNodeAddr(server::NodeWatcher::kEngineNode, node_id, &addr)) {
+    if (!node_watcher()->GetNodeAddr(server::NodeWatcher::kEngineNode, node_id, &addr) && !node_watcher()->GetNodeAddr(server::NodeWatcher::kHybridEngineNode, node_id, &addr)) {
         return nullptr;
     }
     auto egress_hub = std::make_unique<server::EgressHub>(
