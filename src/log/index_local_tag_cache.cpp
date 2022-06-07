@@ -525,9 +525,19 @@ TagCache::TagCache(uint16_t sequencer_id, size_t max_cache_size, uint32_t per_ta
 
 TagCache::~TagCache() {}
 
-void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data){
+void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data, std::vector<PendingMinTag>& pending_min_tags){
     HVLOG(1) << "Provide index data";
     DCHECK_EQ(current_logspace_id(), index_data.logspace_id());
+    uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
+    for (auto pending_min_tag : pending_min_tags) {
+        GetOrCreatePerSpaceTagCache(pending_min_tag.user_logspace)->HandleMinSeqnum(
+            pending_min_tag.tag,
+            pending_min_tag.seqnum,
+            pending_min_tag.storage_shard_id,
+            sequencer_id_,
+            popularity
+        );
+    }
     if (!views_.at(view_id)->CheckIfNewIndexData(index_data)) {
         return;
     }
@@ -542,30 +552,21 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
         if (num_tags < 1){
-            // cache stores only seqnums with tags
+            // tag cache stores only seqnums with tags
             continue;
         }
         uint32_t seqnum = index_data.seqnum_halves(i);
-        for(size_t j = 0; j < num_tags; j++){
-            received_data_[seqnum] = IndexData {
-                .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
-                .user_logspace = index_data.user_logspaces(i),
-                .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
-            };
-        }
+        received_data_[seqnum] = IndexData {
+            .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
+            .user_logspace = index_data.user_logspaces(i),
+            .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
+        };
         tag_iter += num_tags;
     }
     AdvanceIndexProgress(view_id);
 }
 
 void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto){
-    if (index_result_proto.found()){
-        HVLOG_F(1, "Tag={} with min_seqnum={}", tag, index_result_proto.seqnum());
-        DCHECK(index_result_proto.seqnum() != kInvalidLogSeqNum);
-    } else {
-        HVLOG_F(1, "Tag={} with no min_seqnum", tag);
-        DCHECK(index_result_proto.seqnum() == kInvalidLogSeqNum);
-    }
     GetOrCreatePerSpaceTagCache(user_logspace)->HandleMinSeqnum(
         tag,
         index_result_proto.seqnum(),

@@ -5,6 +5,14 @@
 namespace faas {
 namespace log {
 
+struct PendingMinTag {
+public:
+    uint64_t tag;
+    uint64_t seqnum;
+    uint16_t storage_shard_id;
+    uint32_t user_logspace;
+};
+
 class TagSuffixLink {
 public:
     TagSuffixLink(uint32_t seqnum, uint16_t storage_shard_id);
@@ -101,7 +109,7 @@ public:
 
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
 
-    void ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data_proto);
+    void ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data_proto, std::vector<PendingMinTag>& pending_min_tags);
     void ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto);
     bool AdvanceIndexProgress(uint16_t view_id);
     void MakeQuery(const IndexQuery& query);

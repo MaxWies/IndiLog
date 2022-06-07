@@ -36,7 +36,8 @@ Engine::Engine(engine::Engine* engine)
     : EngineBase(engine),
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
-      current_view_active_(false)
+      current_view_active_(false),
+      no_min_seqnum_tag_completion_(absl::GetFlag(FLAGS_slog_deactivate_min_seqnum_completion))
 #ifdef __FAAS_STAT_THREAD
       ,
       statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
@@ -338,7 +339,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     append_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif
     if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED 
-        || absl::GetFlag(FLAGS_slog_deactivate_min_seqnum_completion) 
+        || no_min_seqnum_tag_completion_
         || op->user_tags.empty() 
         || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
         ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
@@ -656,9 +657,6 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     Index::QueryResultVec query_results;
     Index::QueryResultVec local_index_misses;
     {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
-        ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         // if (!view_mutable_.GetMyStorageShards().contains(message.logspace_id)) {
         //     uint32_t current_max;
         //     if(max_index_metalog_position_.contains(message.logspace_id)) {
@@ -669,17 +667,30 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
         // }
         DCHECK(message.view_id < views_.size());
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
+            ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
+            std::vector<PendingMinTag> pending_min_tags;
+            {
+                absl::MutexLock min_tag_lk(&min_tag_mu_);
+                pending_min_tags = std::move(pending_min_tags_);
+                pending_min_tags_.clear();
+            }
             // feed tag cache
             auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
             {
                 auto locked_tag_cache = tag_cache_ptr.Lock();
                 locked_tag_cache->ProvideIndexData(
                     message.view_id,
-                    index_data_proto
+                    index_data_proto,
+                    pending_min_tags
                 );
                 locked_tag_cache->PollQueryResults(&query_results);
             }
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
+            absl::ReaderMutexLock view_lk(&view_mu_);
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
+            ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
             // feed complete index
             auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
             {
@@ -782,14 +793,13 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             DCHECK(message.query_seqnum == 0);
             absl::ReaderMutexLock view_lk(&view_mu_);
             IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, gsl::narrow_cast<uint32_t>(0));
-            LockablePtr<TagCache> tag_cache_ptr;
-            {
-                tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
-            }
-            {
-                auto locked_tag_cache = tag_cache_ptr.Lock();
-                locked_tag_cache->ProvideMinSeqnumData(message.user_logspace, message.query_tag, index_result_proto);
-            }
+            absl::MutexLock min_tag_lk(&min_tag_mu_);
+            pending_min_tags_.push_back(PendingMinTag{
+                message.query_tag,
+                index_result_proto.seqnum(),
+                gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()),
+                message.user_logspace
+            });
         } else if (result == SharedLogResultType::INDEX_MIN_FAILED) {
             LOG_F(ERROR, "Seqnum min request at index node for tag {} failed", message.origin_node_id, message.query_tag);
         }
