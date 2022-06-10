@@ -18,8 +18,7 @@ IndexNode::IndexNode(uint16_t node_id)
     : IndexBase(node_id),
       log_header_(fmt::format("Index[{}-N]: ", node_id)),
       current_view_(nullptr),
-      current_view_active_(false),
-      next_index_read_op_id_(0) {}
+      current_view_active_(false) {}
 
 IndexNode::~IndexNode() {}
 
@@ -251,6 +250,12 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
     if(!view_mutable_.PutCurrentEngineNodeId(received_message.sequencer_id, received_message.engine_node_id)){
         HLOG_F(WARNING, "Engine with id={} already registered", received_message.engine_node_id);
     }
+    if(ongoing_engine_index_reads_.contains(received_message.engine_node_id)){
+        HLOG_F(WARNING, "Remove index read operations of engine with id={}", received_message.engine_node_id);
+        ongoing_engine_index_reads_.erase(received_message.engine_node_id);
+    }
+    EngineIndexReadOp* engine_index_read_ops = new EngineIndexReadOp();
+    ongoing_engine_index_reads_[received_message.engine_node_id].reset(engine_index_read_ops);
     HLOG_F(INFO, "Registration ok. engine_id={}", received_message.engine_node_id);
     SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
             SharedLogResultType::REGISTER_INDEX_OK,
@@ -266,6 +271,9 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
 void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
     absl::MutexLock view_lk(&view_mu_);
     view_mutable_.RemoveCurrentEngineNodeId(engine_node_id);
+    if (ongoing_engine_index_reads_.contains(engine_node_id)){
+        ongoing_engine_index_reads_.erase(engine_node_id);
+    }
 }
 
 bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
@@ -275,75 +283,18 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
         bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
     );
     DCHECK_NE(index_query_result_other.state, IndexQueryResult::kContinue); //"kContinue cannot be merged"
+    EngineIndexReadOp* engine_index_read_op = nullptr;
     size_t num_index_shards; 
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         num_index_shards = current_view_->num_index_shards();
+        engine_index_read_op = ongoing_engine_index_reads_.at(index_query_result_other.original_query.origin_node_id).get();
     }
-    std::pair<uint16_t, uint64_t> key = std::make_pair(index_query_result_other.original_query.origin_node_id, index_query_result_other.original_query.client_data);
-    absl::MutexLock lk(&index_reads_mu_);
-    IndexReadOp* op;
-    bool exists = ongoing_index_reads_.contains(key);
-    if (!exists) {
-        op = index_read_op_pool_.Get();
-        op->id = next_index_read_op_id_.fetch_add(1, std::memory_order_acq_rel);
-        op->start_timestamp = GetMonotonicMicroTimestamp();
-        op->merged_nodes.insert(index_node_id_other);
-        op->index_query_result = index_query_result_other;
-        ongoing_index_reads_.insert({key, op});
-        HVLOG_F(1, "IndexRead: Create new index read operation with op_id={}", op->id);
-    } else {
-        op = ongoing_index_reads_.at(key);
-        HVLOG_F(1, "IndexRead: Retrieve index read operation with op_id={}", op->id);
-        if(op->merged_nodes.contains(index_node_id_other)){
-            HLOG_F(ERROR, "IndexRead: Result of index_node={} was already merged for op_id={}", index_node_id_other, op->id);
-            return false;
-        }
-        uint64_t mergedResult = op->index_query_result.found_result.seqnum;
-        uint64_t slaveResult = index_query_result_other.found_result.seqnum;
-        HVLOG_F(1, "IndexRead: Merging: merged_result={}, other_result={}, op_id={}", mergedResult, slaveResult, op->id);
-        if (op->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kFound){
-            if (mergedResult == slaveResult) {
-                LOG(FATAL) << "Due to sharding there can never be the same result if sequence numbers were found";
-            }
-        }
-        if (op->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kEmpty){
-            // merged result is found, other result is empty
-            HVLOG (1) << "IndexRead: Current result is FOUND, other result is EMPTY";
-        } 
-        else if (op->index_query_result.state == IndexQueryResult::kEmpty && index_query_result_other.state == IndexQueryResult::kFound) {
-            // merged result is empty, other result is found
-            HVLOG (1) << "IndexRead: Current result is EMPTY, other result is FOUND";
-            op->index_query_result = index_query_result_other;
-        }
-        else if (op->index_query_result.original_query.direction == IndexQuery::ReadDirection::kReadPrev){
-            if (mergedResult < slaveResult) {
-                // other result is closer
-                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_prev and query_seqnum={}", 
-                    mergedResult, slaveResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
-                );
-                op->index_query_result = index_query_result_other;
-            }
-        } 
-        else { // readNext, readNextB
-            if (slaveResult < mergedResult) {
-                // other result is closer
-                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_next and query_seqnum={}", 
-                    mergedResult, slaveResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
-                );
-                op->index_query_result = index_query_result_other;
-            }
-        }
-        op->merged_nodes.insert(index_node_id_other);
-        HVLOG_F(1, "IndexRead: Merged result merged={} for op_id={}", op->merged_nodes.size(), op->id);
+    if (engine_index_read_op == nullptr) {
+        HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result_other.original_query.origin_node_id);
+        return false;
     }
-    *merged_index_query_result = std::move(op->index_query_result);
-    if(op->merged_nodes.size() == num_index_shards){
-        ongoing_index_reads_.erase(key);
-        return true;
-    }
-    DCHECK_LT(op->merged_nodes.size(), num_index_shards);
-    return false;
+    return engine_index_read_op->Merge(num_index_shards, index_node_id_other, index_query_result_other, merged_index_query_result);
 }
 
 void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload){
@@ -362,7 +313,7 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std
         HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
         ForwardReadRequest(merged_index_query_result);
     } else if (merge_complete && !merged_index_query_result.IsFound()){
-        HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
+        HVLOG_F(1, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
             merged_index_query_result.original_query.DirectionToString(), 
             merged_index_query_result.original_query.user_logspace, 
             merged_index_query_result.original_query.user_tag, 
@@ -393,7 +344,7 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
         HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
         ForwardReadRequest(merged_index_query_result);
     } else if (merge_complete && !merged_index_query_result.IsFound()){
-        HLOG_F(INFO, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
+        HVLOG_F(1, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
             merged_index_query_result.original_query.DirectionToString(), 
             merged_index_query_result.original_query.user_logspace, 
             merged_index_query_result.original_query.user_tag, 
@@ -636,6 +587,78 @@ IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message,
             .seqnum = result.seqnum()
         }
     };
+}
+
+EngineIndexReadOp::EngineIndexReadOp(){
+    log_header_ = "EngineIndexReadOp";
+}
+
+EngineIndexReadOp::~EngineIndexReadOp() {}
+
+bool EngineIndexReadOp::Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
+    uint64_t key = index_query_result_other.original_query.client_data;
+    absl::MutexLock lk(&index_reads_mu_);
+    bool exists = ongoing_index_reads_.contains(key);
+    IndexReadOp* op = nullptr;
+    if (!exists) {
+        HVLOG_F(1, "IndexRead: Create new index read operation for key={}", bits::HexStr0x(key));
+        ongoing_index_reads_[key] = new IndexReadOp();
+        op = ongoing_index_reads_[key];
+        op->merged_nodes.insert(index_node_id_other);
+        op->index_query_result = index_query_result_other;
+    } else {
+        op = ongoing_index_reads_.at(key);
+        HVLOG_F(1, "IndexRead: Retrieve index read operation for key={}", bits::HexStr0x(key));
+        if(op->merged_nodes.contains(index_node_id_other)){
+            HLOG_F(ERROR, "IndexRead: Result of index_node={} was already merged", index_node_id_other);
+            return false;
+        }
+        uint64_t mergedResult = op->index_query_result.found_result.seqnum;
+        uint64_t otherResult = index_query_result_other.found_result.seqnum;
+        HVLOG_F(1, "IndexRead: Merging: merged_result={}, other_result={}", mergedResult, otherResult);
+        if (op->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kFound){
+            if (mergedResult == otherResult) {
+                LOG(FATAL) << "Due to sharding there can never be the same result if sequence numbers were found";
+            }
+        }
+        if (op->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kEmpty){
+            // merged result is found, other result is empty
+            HVLOG (1) << "IndexRead: Current result is FOUND, other result is EMPTY";
+        } 
+        else if (op->index_query_result.state == IndexQueryResult::kEmpty && index_query_result_other.state == IndexQueryResult::kFound) {
+            // merged result is empty, other result is found
+            HVLOG (1) << "IndexRead: Current result is EMPTY, other result is FOUND";
+            op->index_query_result = index_query_result_other;
+        }
+        else if (op->index_query_result.original_query.direction == IndexQuery::ReadDirection::kReadPrev){
+            if (mergedResult < otherResult) {
+                // other result is closer
+                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_prev and query_seqnum={}", 
+                    mergedResult, otherResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
+                );
+                op->index_query_result = index_query_result_other;
+            }
+        } 
+        else { // readNext, readNextB
+            if (otherResult < mergedResult) {
+                // other result is closer
+                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_next and query_seqnum={}", 
+                    mergedResult, otherResult, bits::HexStr0x(op->index_query_result.original_query.query_seqnum)
+                );
+                op->index_query_result = index_query_result_other;
+            }
+        }
+        op->merged_nodes.insert(index_node_id_other);
+        HVLOG_F(1, "IndexRead: Merged {} results. key={}", op->merged_nodes.size(), bits::HexStr0x(key));
+    }
+    *merged_index_query_result = op->index_query_result;
+    if(op->merged_nodes.size() == num_index_shards){
+        HVLOG_F(1, "Erase key={}", bits::HexStr0x(key));
+        ongoing_index_reads_.erase(key);
+        return true;
+    }
+    DCHECK_LT(op->merged_nodes.size(), num_index_shards);
+    return false;
 }
 
 }  // namespace log

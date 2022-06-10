@@ -55,13 +55,6 @@ protected:
     bool SendStorageReadRequest(const IndexQueryResult& result, const View::StorageShard* storage_shard_node);
     void SendRegistrationResponse(const protocol::SharedLogMessage& request, protocol::SharedLogMessage* response);
 
-    struct IndexReadOp {
-        uint64_t id;
-        int64_t start_timestamp;
-        absl::flat_hash_set<uint16_t> merged_nodes; //todo: merged shard less error prone
-        IndexQueryResult index_query_result; // stores the current result
-    };
-
 private:
     const uint16_t node_id_;
 

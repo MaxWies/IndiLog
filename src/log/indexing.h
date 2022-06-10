@@ -8,6 +8,22 @@
 namespace faas {
 namespace log {
 
+struct IndexReadOp {
+    absl::flat_hash_set<uint16_t> merged_nodes;
+    IndexQueryResult index_query_result;
+};
+
+class EngineIndexReadOp {
+public:
+    EngineIndexReadOp();
+    ~EngineIndexReadOp();
+    bool Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
+private:
+    std::string log_header_;
+    absl::Mutex index_reads_mu_;
+    absl::flat_hash_map</* client_data */uint64_t, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
+};
+
 class IndexNode final : public IndexBase {
 public:
     explicit IndexNode(uint16_t node_id);
@@ -24,11 +40,8 @@ private:
     LogSpaceCollection<Index>
         index_collection_        ABSL_GUARDED_BY(view_mu_);
 
-    absl::Mutex index_reads_mu_;
-    utils::ThreadSafeObjectPool<IndexReadOp> index_read_op_pool_;
-    std::atomic<uint64_t> next_index_read_op_id_;
     log_utils::FutureRequests future_requests_;
-    absl::flat_hash_map<std::pair</*engine_id*/uint16_t, /* client_data */ uint64_t>, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
+    absl::flat_hash_map</*engine_id*/uint16_t, std::unique_ptr<EngineIndexReadOp>> ongoing_engine_index_reads_ ABSL_GUARDED_BY(view_mu_);
 
     void OnViewCreated(const View* view) override;
     // void OnViewFrozen(const View* view) override;
