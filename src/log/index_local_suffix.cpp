@@ -92,7 +92,7 @@ void SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
     if (query_view_id == view_id()){
         uint32_t position = bits::LowHalf64(query.metalog_progress);
         if (metalog_position() < position){
-            HLOG_F(INFO, "Query with future metalog {}. My metalog_position is {}", position, metalog_position());
+            HVLOG_F(1, "Query with future metalog {}. My metalog_position is {}", position, metalog_position());
             pending_queries_.insert(std::make_pair(position, query));
             return;
         }

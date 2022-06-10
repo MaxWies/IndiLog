@@ -37,7 +37,7 @@ Engine::Engine(engine::Engine* engine)
       log_header_(fmt::format("LogEngine[{}-N]: ", my_node_id())),
       current_view_(nullptr),
       current_view_active_(false),
-      no_min_seqnum_tag_completion_(absl::GetFlag(FLAGS_slog_deactivate_min_seqnum_completion))
+      min_seqnum_tag_completion_(absl::GetFlag(FLAGS_slog_activate_min_seqnum_completion))
 #ifdef __FAAS_STAT_THREAD
       ,
       statistics_thread_("BG_ST", [this] { this->StatisticsThreadMain(); }),
@@ -339,7 +339,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
     append_ops_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif
     if (indexing_strategy_ != IndexingStrategy::DISTRIBUTED 
-        || no_min_seqnum_tag_completion_
+        || !min_seqnum_tag_completion_
         || op->user_tags.empty() 
         || (op->user_tags.size() == 1 && op->user_tags.at(0) == kEmptyLogTag)) {
         ReplicateLogEntry(view, storage_shard, log_metadata, VECTOR_AS_SPAN(op->user_tags), op->data.to_span());
@@ -671,6 +671,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
             IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
             ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
             std::vector<PendingMinTag> pending_min_tags;
+            if (min_seqnum_tag_completion_)
             {
                 absl::MutexLock min_tag_lk(&min_tag_mu_);
                 pending_min_tags = std::move(pending_min_tags_);
@@ -790,6 +791,10 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 seqnum_cache_->Put(index_result_proto.seqnum(), gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
             }
         } else if (result == SharedLogResultType::INDEX_MIN_OK) {
+            if (!min_seqnum_tag_completion_) {
+                LOG(ERROR) << "Min seqnum completion is deactivated";
+                return;
+            }
             DCHECK(message.query_seqnum == 0);
             absl::ReaderMutexLock view_lk(&view_mu_);
             IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, gsl::narrow_cast<uint32_t>(0));

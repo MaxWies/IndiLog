@@ -528,15 +528,17 @@ TagCache::~TagCache() {}
 void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data, std::vector<PendingMinTag>& pending_min_tags){
     HVLOG(1) << "Provide index data";
     DCHECK_EQ(current_logspace_id(), index_data.logspace_id());
-    uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
-    for (auto pending_min_tag : pending_min_tags) {
-        GetOrCreatePerSpaceTagCache(pending_min_tag.user_logspace)->HandleMinSeqnum(
-            pending_min_tag.tag,
-            pending_min_tag.seqnum,
-            pending_min_tag.storage_shard_id,
-            sequencer_id_,
-            popularity
-        );
+    if (!pending_min_tags.empty()){
+        uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
+        for (auto pending_min_tag : pending_min_tags) {
+            GetOrCreatePerSpaceTagCache(pending_min_tag.user_logspace)->HandleMinSeqnum(
+                pending_min_tag.tag,
+                pending_min_tag.seqnum,
+                pending_min_tag.storage_shard_id,
+                sequencer_id_,
+                popularity
+            );
+        }
     }
     if (!views_.at(view_id)->CheckIfNewIndexData(index_data)) {
         return;

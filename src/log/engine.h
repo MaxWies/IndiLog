@@ -40,7 +40,7 @@ private:
     LogSpaceCollection<Index>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
-    bool no_min_seqnum_tag_completion_;
+    bool min_seqnum_tag_completion_;
 
     absl::Mutex min_tag_mu_;
     std::vector<PendingMinTag> pending_min_tags_ ABSL_GUARDED_BY(min_tag_mu_);
