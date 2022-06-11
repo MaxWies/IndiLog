@@ -104,6 +104,9 @@ __BEGIN_THIRD_PARTY_HEADERS
 #include <absl/functional/bind_front.h>
 #include <absl/algorithm/container.h>
 
+#include <oneapi/tbb/concurrent_hash_map.h>
+#include <oneapi/tbb/tbb_allocator.h>
+
 __END_THIRD_PARTY_HEADERS
 
 #endif  // defined(__FAAS_HAVE_ABSL) && !defined(__FAAS_USED_IN_BINDING)

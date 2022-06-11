@@ -29,6 +29,13 @@ mkdir -p ${DEPS_INSTALL_PATH}
 
 export PKG_CONFIG_PATH=${DEPS_INSTALL_PATH}/lib/pkgconfig
 
+# Build tbb
+cd $BASE_DIR/deps/oneTBB && rm -rf build && mkdir -p build && cd build && \
+  cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DTBB_TEST=OFF \
+        -DCMAKE_INSTALL_PREFIX=${DEPS_INSTALL_PATH} .. && \
+  make -j$(nproc) install && \
+  rm -rf $BASE_DIR/deps/oneTBB/build
+
 # Build abseil-cpp
 cd $BASE_DIR/deps/abseil-cpp && rm -rf build && mkdir -p build && cd build && \
   cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_CXX_STANDARD=17 \

@@ -10,6 +10,8 @@ RUN CXX=clang++ make -j $(nproc)
 
 FROM ubuntu:focal as release
 
+COPY --from=builder /slog/deps/out/lib/libtbb* /lib/x86_64-linux-gnu/
+
 COPY --from=builder /slog/bin/release/launcher   /slog/launcher
 COPY --from=builder /slog/bin/release/gateway    /slog/gateway
 COPY --from=builder /slog/bin/release/engine     /slog/engine

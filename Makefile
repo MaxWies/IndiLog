@@ -18,7 +18,8 @@ INCLUDES = -I$(SRC_PATH) -I./include -I./deps/out/include \
 	-I./deps/fmt/include \
 	-I./deps/GSL/include \
 	-I./deps/json/single_include \
-	-I./deps/xxHash
+	-I./deps/xxHash \
+	-I./deps/oneTBB/include
 # Protobuf compiler
 PROTOC = ./deps/out/bin/protoc
 # General linker settings
@@ -30,7 +31,8 @@ LINK_FLAGS = -Ldeps/out/lib \
 	-Wl,--start-group $(ABSL_LIBRARIES) -Wl,--end-group \
 	-lzstd -ljemalloc \
 	-Wl,-Bdynamic -lpthread -ldl \
-	-Wl,--gc-sections
+	-Wl,--gc-sections \
+	-Wl,-ltbb
 # Additional release-specific linker settings
 RLINK_FLAGS =
 # Additional debug-specific linker settings

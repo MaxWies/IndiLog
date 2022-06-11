@@ -13,6 +13,8 @@ struct IndexReadOp {
     IndexQueryResult index_query_result;
 };
 
+typedef tbb::concurrent_hash_map<uint64_t, IndexReadOp*> OngoingIndexReadsTable;
+
 class EngineIndexReadOp {
 public:
     EngineIndexReadOp();
@@ -20,8 +22,7 @@ public:
     bool Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
 private:
     std::string log_header_;
-    absl::Mutex index_reads_mu_;
-    absl::flat_hash_map</* client_data */uint64_t, IndexReadOp*> ongoing_index_reads_ ABSL_GUARDED_BY(index_reads_mu_);
+    OngoingIndexReadsTable ongoing_index_reads_;
 };
 
 class IndexNode final : public IndexBase {
@@ -43,6 +44,9 @@ private:
     log_utils::FutureRequests future_requests_;
     absl::flat_hash_map</*engine_id*/uint16_t, std::unique_ptr<EngineIndexReadOp>> ongoing_engine_index_reads_ ABSL_GUARDED_BY(view_mu_);
 
+    // absl::Mutex tag_min_mu_;
+    // absl::flat_hash_map<uint64_t, uint64_t> per_tag_min_seqnum ABSL_GUARDED_BY(tag_min_mu_);
+
     void OnViewCreated(const View* view) override;
     // void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
@@ -51,6 +55,7 @@ private:
     void HandleReadMinRequest(const protocol::SharedLogMessage& request) override;
     void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                             std::span<const char> payload) override;
+    void FilterNewTags(const View* view, const IndexDataProto& index_data_proto);
     void OnRecvRegistration(const protocol::SharedLogMessage& message) override;
 
     bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);

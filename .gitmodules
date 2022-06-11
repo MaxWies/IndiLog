@@ -43,3 +43,6 @@
 [submodule "deps/tkrzw"]
 	path = deps/tkrzw
 	url = https://github.com/estraier/tkrzw.git
+[submodule "deps/oneTBB"]
+	path = deps/oneTBB
+	url = https://github.com/oneapi-src/oneTBB.git

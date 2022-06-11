@@ -758,6 +758,11 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
+            // TODO!!
+            // Put the received seqnum into seqnum cache (if empty tag based request)
+            // if (message.query_tag == query_tag && seqnum_cache_.has_value()){
+            //     seqnum_cache_->Put(seqnum, gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
+            // }
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
             LogCachePut(log_metadata, user_tags, log_data);
@@ -784,13 +789,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                                         static_cast<int>(payload.size()))) {
             LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
         }
-        if (result == SharedLogResultType::INDEX_OK) {
-            DCHECK(index_result_proto.found());
-            // Put the received seqnum into seqnum cache (if not a tag based request) 
-            if (message.query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
-                seqnum_cache_->Put(index_result_proto.seqnum(), gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
-            }
-        } else if (result == SharedLogResultType::INDEX_MIN_OK) {
+        if (result == SharedLogResultType::INDEX_MIN_OK) {
             if (!min_seqnum_tag_completion_) {
                 LOG(ERROR) << "Min seqnum completion is deactivated";
                 return;
