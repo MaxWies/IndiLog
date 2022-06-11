@@ -60,7 +60,7 @@ Engine::Engine(engine::Engine* engine)
           } else{
               if(absl::GetFlag(FLAGS_slog_engine_distributed_indexing)){
                   indexing_strategy_ = IndexingStrategy::DISTRIBUTED;
-                  seqnum_cache_.emplace(1000);
+                  seqnum_cache_.emplace(absl::GetFlag(FLAGS_slog_engine_seqnum_cache_cap));
               } else {
                   indexing_strategy_ = IndexingStrategy::COMPLETE;
               }
@@ -747,6 +747,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
 #endif
         if (result == SharedLogResultType::READ_OK) {
             uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
+            uint64_t query_tag = op->query_tag;
             HVLOG_F(1, "Receive remote read response for log (seqnum {})", seqnum);
             std::span<const uint64_t> user_tags;
             std::span<const char> log_data;
@@ -758,11 +759,10 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 MessageHelper::AppendInlineData(&response, aux_data);
             }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
-            // TODO!!
-            // Put the received seqnum into seqnum cache (if empty tag based request)
-            // if (message.query_tag == query_tag && seqnum_cache_.has_value()){
-            //     seqnum_cache_->Put(seqnum, gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()));
-            // }
+            // Put the received seqnum into seqnum cache for empty tag queries
+            if (query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
+                seqnum_cache_->Put(seqnum, message.storage_shard_id);
+            }
             // Put the received log entry into log cache
             LogMetaData log_metadata = log_utils::GetMetaDataFromMessage(message);
             LogCachePut(log_metadata, user_tags, log_data);
@@ -847,33 +847,33 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
     if (result == protocol::SharedLogResultType::REGISTER_SEQUENCER_OK){
         DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
         HLOG_F(INFO, "Registered at sequencer_node={} and blocked shard_id={}", 
-            received_message.origin_node_id, received_message.shard_id);
+            received_message.origin_node_id, received_message.storage_shard_id);
         if(view_mutable_.UpdateSequencerConnection(logspace_id, received_message.origin_node_id, received_message.local_start_id)){
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(SharedLogResultType::REGISTER_ENGINE,
-                current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id, received_message.local_start_id
+                current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id, received_message.local_start_id
             );
             const View::NodeIdVec storage_node_ids = current_view_->GetStorageNodes();
             for(uint16_t storage_node_id : storage_node_ids){
                 HVLOG_F(1, "Send registration request to storage node. engine_node={}, storage_node={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
-                    my_node_id(), storage_node_id, current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.local_start_id);
+                    my_node_id(), storage_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
                 SendRegistrationRequest(storage_node_id, protocol::ConnType::ENGINE_TO_STORAGE, &request);
             }
             const View::NodeIdVec index_node_ids = current_view_->GetIndexNodes();
             for(uint16_t index_node_id : index_node_ids){
                 HVLOG_F(1, "Send registration request to index node. engine_node={}, index_node_id={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
-                    my_node_id(), index_node_id, current_view_->id(), received_message.sequencer_id, received_message.shard_id, received_message.local_start_id);
+                    my_node_id(), index_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
                 SendRegistrationRequest(index_node_id, protocol::ConnType::ENGINE_TO_INDEX, &request);
             }
         }
     }
     else if(result == protocol::SharedLogResultType::REGISTER_STORAGE_OK){
         HLOG_F(INFO, "Registered at storage node. storage_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
-            received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
+            received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
             HLOG(INFO) << "Registered at all storage and index nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
-                received_message.shard_id, received_message.engine_node_id,
+                received_message.storage_shard_id, received_message.engine_node_id,
                 /* local_start_id*/ view_mutable_.GetLocalStartOfConnection(logspace_id)
             );
             SendRegistrationRequest(received_message.sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
@@ -881,12 +881,12 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
     }
     else if (result == protocol::SharedLogResultType::REGISTER_INDEX_OK) {
         HLOG_F(INFO, "Registered at index node. index_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
-            received_message.origin_node_id, received_message.sequencer_id, received_message.shard_id, received_message.engine_node_id);
+            received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateIndexConnections(logspace_id, received_message.origin_node_id)){
             HLOG(INFO) << "Registered at all storage and index nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
-                received_message.shard_id, received_message.engine_node_id,
+                received_message.storage_shard_id, received_message.engine_node_id,
                 /* local_start_id*/ view_mutable_.GetLocalStartOfConnection(logspace_id)
             );
             SendRegistrationRequest(received_message.sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
@@ -896,9 +896,9 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         // registration finished
         DCHECK_EQ(received_message.origin_node_id, received_message.sequencer_id);
         HLOG_F(INFO, "Registration finished for sequencer_node={}, unblocked shard_id={}, local_start_id={}, metalog_position={}", 
-            received_message.origin_node_id, received_message.shard_id, received_message.local_start_id, received_message.metalog_position
+            received_message.origin_node_id, received_message.storage_shard_id, received_message.local_start_id, received_message.metalog_position
         );
-        const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id));
+        const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, received_message.storage_shard_id));
         view_mutable_.UpdateMyStorageShards(logspace_id, storage_shard);
         uint32_t local_start_id = view_mutable_.GetLocalStartOfConnection(received_message.logspace_id);
         DCHECK_EQ(local_start_id, received_message.local_start_id);
@@ -912,7 +912,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         //     index_metalog_position = max_index_metalog_position_.at(received_message.logspace_id);
         // }
         HVLOG_F(1, "Init with metalog_position={}", metalog_position);
-        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.shard_id, current_view_, received_message.sequencer_id, metalog_position, received_message.local_start_id));
+        producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.storage_shard_id, current_view_, received_message.sequencer_id, metalog_position, received_message.local_start_id));
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             if(!suffix_chain_collection_.LogSpaceExists(received_message.sequencer_id)){
                 suffix_chain_collection_.InstallLogSpace(std::make_unique<SeqnumSuffixChain>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_seqnum_suffix_cap), 0.2));
@@ -1103,10 +1103,8 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
             local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
             ProcessIndexFoundResult(result);
-            if (result.original_query.user_tag == kEmptyLogTag){
-                if (seqnum_cache_.has_value()){
-                    seqnum_cache_->Put(result.found_result.seqnum, result.found_result.storage_shard_id);
-                }
+            if (result.original_query.user_tag == kEmptyLogTag && seqnum_cache_.has_value()){
+                seqnum_cache_->Put(result.found_result.seqnum, result.found_result.storage_shard_id);
             }
             break;
         case IndexQueryResult::kEmpty:

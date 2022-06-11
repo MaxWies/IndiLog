@@ -441,6 +441,7 @@ bool EngineBase::SendStorageReadRequest(const IndexQueryResult& result,
     SharedLogMessage request = SharedLogMessageHelper::NewReadAtMessage(
         bits::HighHalf64(seqnum), bits::LowHalf64(seqnum));
     request.user_metalog_progress = result.metalog_progress;
+    request.storage_shard_id = storage_shard->local_shard_id();
     request.origin_node_id = result.original_query.origin_node_id;
     request.hop_times = result.original_query.hop_times + 1;
     request.client_data = result.original_query.client_data;

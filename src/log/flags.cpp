@@ -17,6 +17,7 @@ ABSL_FLAG(bool, slog_engine_propagate_auxdata, false, "");
 ABSL_FLAG(bool, slog_engine_index_tier_only, false, "");
 ABSL_FLAG(bool, slog_engine_distributed_indexing, false, "");
 ABSL_FLAG(bool, slog_activate_min_seqnum_completion, false, "");
+ABSL_FLAG(int, slog_engine_seqnum_cache_cap, 1000, "");
 ABSL_FLAG(int, slog_engine_seqnum_suffix_cap, 100000, "");
 ABSL_FLAG(int, slog_engine_tag_cache_cap, 1000000, "");
 ABSL_FLAG(int, slog_engine_per_tag_seqnums_limit, 10000, "");

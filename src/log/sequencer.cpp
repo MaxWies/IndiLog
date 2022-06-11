@@ -279,8 +279,8 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
     absl::MutexLock view_lk(&view_mu_);
 
     bool registration_failed = false;
-    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.shard_id)){
-        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.shard_id);
+    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.storage_shard_id)){
+        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.storage_shard_id);
         registration_failed = true;
     }
     if(received_message.view_id != current_view_->id()){
@@ -289,7 +289,7 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
     }
     if(received_message.sequencer_id != my_node_id()){
         HLOG_F(ERROR, "I am not primary. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}",
-            my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id);
+            my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.storage_shard_id);
         registration_failed = true;
     }
     if (registration_failed){
@@ -297,7 +297,7 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
             SharedLogResultType::REGISTER_SEQUENCER_FAILED,
             current_view_->id(),
             received_message.sequencer_id,
-            received_message.shard_id,
+            received_message.storage_shard_id,
             received_message.engine_node_id,
             0
         );
@@ -319,7 +319,7 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
         {
             auto locked_logspace = logspace_ptr.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
-            registration_ok = locked_logspace->BlockShard(received_message.shard_id, &local_start_id);
+            registration_ok = locked_logspace->BlockShard(received_message.storage_shard_id, &local_start_id);
         }
         type = SharedLogResultType::REGISTER_SEQUENCER_OK;
     } else if (result == SharedLogResultType::REGISTER_UNBLOCK){
@@ -327,12 +327,12 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
         {
             auto locked_logspace = logspace_ptr.Lock();
             RETURN_IF_LOGSPACE_INACTIVE(locked_logspace);
-            registration_ok = locked_logspace->UnblockShard(received_message.shard_id, &local_start_id);
+            registration_ok = locked_logspace->UnblockShard(received_message.storage_shard_id, &local_start_id);
             metalog_position = locked_logspace->metalog_position();
         }
         if(registration_ok){
             view_mutable_.PutStorageShardOccupation(
-                bits::JoinTwo16(my_node_id(), received_message.shard_id), received_message.engine_node_id);
+                bits::JoinTwo16(my_node_id(), received_message.storage_shard_id), received_message.engine_node_id);
         }
         type = SharedLogResultType::REGISTER_UNBLOCK;
     } else {
@@ -345,14 +345,14 @@ void Sequencer::OnRecvRegistration(const SharedLogMessage& received_message) {
         type,
         received_message.view_id,
         received_message.sequencer_id,
-        received_message.shard_id,
+        received_message.storage_shard_id,
         received_message.engine_node_id,
         local_start_id
     );
     response.metalog_position = metalog_position;
     if(registration_ok){
         HLOG_F(INFO, "Registration ok, send response. my_sequencer_id={}, message_sequencer_id={}, engine_id={}, shard_id={}, local_start_id={}, metalog_pos={}",
-        my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.shard_id, bits::HexStr0x(local_start_id), metalog_position);
+        my_node_id(), received_message.sequencer_id, received_message.engine_node_id, received_message.storage_shard_id, bits::HexStr0x(local_start_id), metalog_position);
     }
     if(!SendRegistrationResponse(received_message, protocol::ConnType::SEQUENCER_TO_ENGINE, &response)){
         HLOG(ERROR) << "Could not send registration response";

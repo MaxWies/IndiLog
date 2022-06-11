@@ -288,16 +288,10 @@ struct SharedLogMessage {
     union {
         uint64_t query_tag;   // [24:32]
         struct {
-            uint16_t num_tags;      // [24:26]
-            uint16_t aux_data_size; // [26:28]
-
-            uint32_t _5_padding_5_;
-        } __attribute__ ((packed));
-        struct {
-            uint16_t shard_id;          // [24:26] (only used by REGISTRATION)
+            uint16_t num_tags;          // [24:26]
+            uint16_t aux_data_size;     // [26:28]
+            uint16_t storage_shard_id;  // [28:30] (only used by REGISTRATION | STORAGE_READ feedback)
             uint16_t engine_node_id;    // [26:28] (only used by REGISTRATION)
-
-            uint32_t _6_padding_6_;
         } __attribute__ ((packed));
     };
 
@@ -658,24 +652,24 @@ public:
         return message;
     }
 
-    static SharedLogMessage NewRegisterMessage(uint16_t view_id, uint16_t sequencer_id, uint16_t shard_id, uint16_t engine_id) {
+    static SharedLogMessage NewRegisterMessage(uint16_t view_id, uint16_t sequencer_id, uint16_t storage_shard_id, uint16_t engine_id) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::REGISTER);
         message.op_result = static_cast<uint16_t>(SharedLogResultType::REGISTER_ENGINE);
         message.view_id = view_id;
         message.sequencer_id = sequencer_id;
-        message.shard_id = shard_id;
+        message.storage_shard_id = storage_shard_id;
         message.engine_node_id = engine_id;
         return message;
     }
 
-    static SharedLogMessage NewRegisterResponseMessage(SharedLogResultType result, uint16_t view_id, uint16_t sequencer_id, uint16_t shard_id, uint16_t engine_id, uint32_t local_start_id) {
+    static SharedLogMessage NewRegisterResponseMessage(SharedLogResultType result, uint16_t view_id, uint16_t sequencer_id, uint16_t storage_shard_id, uint16_t engine_id, uint32_t local_start_id) {
         NEW_EMPTY_SHAREDLOG_MESSAGE(message);
         message.op_type = static_cast<uint16_t>(SharedLogOpType::REGISTER);
         message.op_result = static_cast<uint16_t>(result);
         message.view_id = view_id;
         message.sequencer_id = sequencer_id;
-        message.shard_id = shard_id;
+        message.storage_shard_id = storage_shard_id;
         message.engine_node_id = engine_id;
         message.local_start_id = local_start_id;
         return message;

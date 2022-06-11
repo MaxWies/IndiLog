@@ -232,8 +232,8 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
     DCHECK(SharedLogMessageHelper::GetResultType(received_message) == SharedLogResultType::REGISTER_ENGINE);
     absl::MutexLock view_lk(&view_mu_);
     bool registration_failed = false;
-    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.shard_id)){
-        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.shard_id);
+    if(!current_view_->contains_storage_shard_id(received_message.sequencer_id, received_message.storage_shard_id)){
+        HLOG_F(ERROR, "Storage shard does not exist. sequencer_id={}, local_shard_id={}", received_message.sequencer_id, received_message.storage_shard_id);
         registration_failed = true;
     }
     if(received_message.view_id != current_view_->id()){
@@ -246,14 +246,14 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
             SharedLogResultType::REGISTER_STORAGE_FAILED,
             current_view_->id(),
             received_message.sequencer_id,
-            received_message.shard_id,
+            received_message.storage_shard_id,
             received_message.engine_node_id,
             received_message.local_start_id
         );
         SendRegistrationResponse(received_message, &response);
         return;
     }
-    uint32_t global_storage_shard_id = bits::JoinTwo16(received_message.sequencer_id, received_message.shard_id);
+    uint32_t global_storage_shard_id = bits::JoinTwo16(received_message.sequencer_id, received_message.storage_shard_id);
     if(current_view_->GetStorageNode(my_node_id())->IsStorageShardMember(global_storage_shard_id)){
         // discard pending entries
         HLOG_F(INFO, "Storage node is append target, discard pending entries. global_storage_shard_id={}, engine_id={}", bits::HexStr0x(global_storage_shard_id), received_message.engine_node_id);
@@ -261,7 +261,7 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
         {
             auto locked_storage = storage_ptr.Lock();
             HVLOG(1) << "Remove pending entries";
-            locked_storage->RemovePendingEntries(received_message.shard_id);
+            locked_storage->RemovePendingEntries(received_message.storage_shard_id);
             HVLOG(1) << "Pending entries removed";
         }
     }
@@ -272,7 +272,7 @@ void Storage::OnRecvRegistration(const protocol::SharedLogMessage& received_mess
             SharedLogResultType::REGISTER_STORAGE_OK,
             received_message.view_id,
             received_message.sequencer_id,
-            received_message.shard_id,
+            received_message.storage_shard_id,
             received_message.engine_node_id,
             received_message.local_start_id
     );
@@ -294,6 +294,7 @@ void Storage::ProcessReadResults(const LogStorage::ReadResultVec& results) {
             DCHECK_EQ(response.logspace_id, request.logspace_id);
             DCHECK_EQ(response.seqnum_lowhalf, request.seqnum_lowhalf);
             response.user_metalog_progress = request.user_metalog_progress;
+            response.storage_shard_id = request.storage_shard_id;
             SendEngineLogResult(request, &response,
                                 VECTOR_AS_CHAR_SPAN(result.log_entry->user_tags),
                                 STRING_AS_SPAN(result.log_entry->data));

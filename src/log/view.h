@@ -87,6 +87,8 @@ public:
 
         uint32_t shard_id() const { return shard_id_; }
 
+        uint16_t local_shard_id() const { return bits::LowHalf32(shard_id_); }
+
         uint16_t GetSequencerNode() const {
             return sequencer_node_;
         }

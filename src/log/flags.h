@@ -19,6 +19,7 @@ ABSL_DECLARE_FLAG(bool, slog_engine_propagate_auxdata);
 ABSL_DECLARE_FLAG(bool, slog_engine_index_tier_only);
 ABSL_DECLARE_FLAG(bool, slog_engine_distributed_indexing);
 ABSL_DECLARE_FLAG(bool, slog_activate_min_seqnum_completion);
+ABSL_DECLARE_FLAG(int, slog_engine_seqnum_cache_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_seqnum_suffix_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_tag_cache_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_per_tag_seqnums_limit);

@@ -257,7 +257,7 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
             SharedLogResultType::REGISTER_INDEX_FAILED,
             current_view_->id(),
             received_message.sequencer_id,
-            received_message.shard_id,
+            received_message.storage_shard_id,
             received_message.engine_node_id,
             received_message.local_start_id
         );
@@ -279,7 +279,7 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
             SharedLogResultType::REGISTER_INDEX_OK,
             received_message.view_id,
             received_message.sequencer_id,
-            received_message.shard_id,
+            received_message.storage_shard_id,
             received_message.engine_node_id,
             received_message.local_start_id
     );
