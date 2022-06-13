@@ -708,22 +708,6 @@ bool Index::IndexFindPrev(const IndexQuery& query, uint64_t* seqnum, uint16_t* e
 
 IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                          uint64_t seqnum, uint16_t storage_shard_id) {
-    if (query.min_seqnum_query && (query.tail_seqnum == 0 || query.tail_seqnum < seqnum)){
-        // min query: tag is new
-        HVLOG_F(1, "Min query for tag {}: seqnum result higher {} than tail {} of requester", query.user_tag, bits::HexStr0x(seqnum), bits::HexStr0x(query.tail_seqnum));
-        return IndexQueryResult {
-            .state = IndexQueryResult::kFound,
-            .metalog_progress = query.initial ? sharded_index_metalog_progress()
-                                            : query.metalog_progress,
-            .next_view_id = 0,
-            .original_query = query,
-            .found_result = IndexFoundResult {
-                .view_id = 0,
-                .storage_shard_id = 0,
-                .seqnum = kInvalidLogSeqNum
-            }
-        };
-    }
     return IndexQueryResult {
         .state = IndexQueryResult::kFound,
         .metalog_progress = query.initial ? sharded_index_metalog_progress()

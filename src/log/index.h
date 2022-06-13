@@ -26,10 +26,6 @@ struct IndexQuery {
 
     uint16_t master_node_id;
 
-    // todo: refactor, only for min queries in index tier
-    bool min_seqnum_query;
-    uint64_t tail_seqnum;
-
     IndexFoundResult prev_found_result;
 
     static ReadDirection DirectionFromOpType(protocol::SharedLogOpType op_type);

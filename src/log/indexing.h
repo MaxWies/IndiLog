@@ -73,7 +73,7 @@ private:
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void ProcessIndexResult(const IndexQueryResult& query_result);
-    void ProcessIndexMinResult(const IndexQueryResult& query_result);
+    // void ProcessIndexMinResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
 

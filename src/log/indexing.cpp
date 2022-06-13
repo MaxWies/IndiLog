@@ -385,37 +385,37 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
 }
 
 // outdated
-void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
-    if (query_result.original_query.min_seqnum_query){
-        if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
-            // broadcast new tag
-            uint32_t logspace_id;
-            std::vector<uint16_t> engine_ids;
-            {
-                absl::ReaderMutexLock view_lk(&view_mu_);
-                logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
-                uint16_t seqnum_id = bits::LowHalf32(logspace_id);
-                for (uint16_t engine_node_id : view_mutable_.GetCurrentEngineNodeIds(seqnum_id)){
-                    engine_ids.push_back(engine_node_id);
-                }
-            }
-            HVLOG_F(1, "Tag={} is new. Broadcast to {} nodes on compute tier", query_result.original_query.user_tag, engine_ids.size());
-            BroadcastIndexReadResponse(query_result, engine_ids, logspace_id);
-        } else {
-            // send response to engine node
-            HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", 
-                query_result.original_query.user_tag, bits::HexStr0x(query_result.found_result.seqnum), query_result.original_query.origin_node_id
-            );
-            uint32_t logspace_id;
-            {
-                absl::ReaderMutexLock view_lk(&view_mu_);
-                logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
-            }
-            SendIndexReadResponse(query_result, logspace_id);
-        }
-        return;
-    }
-}
+// void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
+//     if (query_result.original_query.min_seqnum_query){
+//         if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
+//             // broadcast new tag
+//             uint32_t logspace_id;
+//             std::vector<uint16_t> engine_ids;
+//             {
+//                 absl::ReaderMutexLock view_lk(&view_mu_);
+//                 logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
+//                 uint16_t seqnum_id = bits::LowHalf32(logspace_id);
+//                 for (uint16_t engine_node_id : view_mutable_.GetCurrentEngineNodeIds(seqnum_id)){
+//                     engine_ids.push_back(engine_node_id);
+//                 }
+//             }
+//             HVLOG_F(1, "Tag={} is new. Broadcast to {} nodes on compute tier", query_result.original_query.user_tag, engine_ids.size());
+//             BroadcastIndexReadResponse(query_result, engine_ids, logspace_id);
+//         } else {
+//             // send response to engine node
+//             HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", 
+//                 query_result.original_query.user_tag, bits::HexStr0x(query_result.found_result.seqnum), query_result.original_query.origin_node_id
+//             );
+//             uint32_t logspace_id;
+//             {
+//                 absl::ReaderMutexLock view_lk(&view_mu_);
+//                 logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
+//             }
+//             SendIndexReadResponse(query_result, logspace_id);
+//         }
+//         return;
+//     }
+// }
 
 void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                         Index::QueryResultVec* more_results) {
@@ -551,15 +551,6 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
             .view_id = message.prev_view_id,
             .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
-        };
-    }
-    if (op_type == SharedLogOpType::READ_MIN) {
-        index_query.min_seqnum_query = true;
-        index_query.tail_seqnum = message.seqnum_timestamp;
-        index_query.prev_found_result = IndexFoundResult {
-            .view_id = 0,
-            .storage_shard_id = 0,
-            .seqnum = kInvalidLogSeqNum
         };
     }
     return index_query;

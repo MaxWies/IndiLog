@@ -149,12 +149,7 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
 }
 
 void IndexBase::SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id) {
-    protocol::SharedLogResultType result_type;
-    if (result.original_query.min_seqnum_query){
-        result_type = protocol::SharedLogResultType::INDEX_MIN_OK;
-    } else {
-        result_type = protocol::SharedLogResultType::INDEX_OK;
-    }
+    protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
@@ -201,12 +196,7 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
 }
 
 void IndexBase::BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id) {
-    protocol::SharedLogResultType result_type;
-    if (result.original_query.min_seqnum_query){
-        result_type = protocol::SharedLogResultType::INDEX_MIN_OK;
-    } else {
-        result_type = protocol::SharedLogResultType::INDEX_OK;
-    }
+    protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
