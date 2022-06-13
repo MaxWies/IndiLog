@@ -4,8 +4,6 @@
 #include "log/common.h"
 #include "log/view.h"
 #include "log/view_watcher.h"
-#include "log/db.h"
-#include "log/cache.h"
 #include "log/index.h"
 #include "server/server_base.h"
 #include "server/ingress_connection.h"
@@ -14,10 +12,10 @@
 namespace faas {
 namespace log {
 
-class IndexBase : public server::ServerBase {
+class MergerBase : public server::ServerBase {
 public:
-    explicit IndexBase(uint16_t node_id);
-    virtual ~IndexBase();
+    explicit MergerBase(uint16_t node_id);
+    virtual ~MergerBase();
 
     void StartInternal() override;
     void StopInternal() override;
@@ -26,30 +24,17 @@ protected:
     uint16_t my_node_id() const { return node_id_; }
 
     virtual void OnViewCreated(const View* view) = 0;
-    // virtual void OnViewFrozen(const View* view) = 0;
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
-    virtual void HandleReadRequest(const protocol::SharedLogMessage& request) = 0;
-    virtual void HandleReadMinRequest(const protocol::SharedLogMessage& request) = 0;
-    virtual void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
-                                        std::span<const char> payload) = 0;
     virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
+    virtual void HandleSlaveResult(const protocol::SharedLogMessage& message) = 0;
     virtual void RemoveEngineNode(uint16_t engine_node_id) = 0;
 
-    //virtual void BackgroundThreadMain() = 0;
 
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
-    // void SendIndexData(const View* view, const IndexDataProto& index_data_proto);
 
-    // void SendEngineIndexResult(const protocol::SharedLogMessage& request,
-    //                          protocol::SharedLogMessage* response,
-    //                          std::span<const char> tags_data);
-
-    void SendMasterIndexResult(const IndexQueryResult& result);
     void SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id);
-    void SendIndexMinReadResponse(const protocol::SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id);
-    void BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id);
     void SendIndexReadFailureResponse(const IndexQuery& query,  protocol::SharedLogResultType result);
     bool SendStorageReadRequest(const IndexQueryResult& result, const View::StorageShard* storage_shard_node);
     void SendRegistrationResponse(const protocol::SharedLogMessage& request, protocol::SharedLogMessage* response);
@@ -58,8 +43,6 @@ private:
     const uint16_t node_id_;
 
     ViewWatcher view_watcher_;
-
-    //base::Thread background_thread_;
 
     absl::flat_hash_map</* id */ int, std::unique_ptr<server::IngressConnection>>
         ingress_conns_;
@@ -91,7 +74,7 @@ private:
 
     void OnNodeOffline(node::NodeType node_type, uint16_t node_id) override;
 
-    DISALLOW_COPY_AND_ASSIGN(IndexBase);
+    DISALLOW_COPY_AND_ASSIGN(MergerBase);
 };
 
 }  // namespace log

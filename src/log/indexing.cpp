@@ -280,12 +280,6 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
     if(!view_mutable_.PutCurrentEngineNodeId(received_message.sequencer_id, received_message.engine_node_id)){
         HLOG_F(WARNING, "Engine with id={} already registered", received_message.engine_node_id);
     }
-    if(ongoing_engine_index_reads_.contains(received_message.engine_node_id)){
-        HLOG_F(WARNING, "Remove index read operations of engine with id={}", received_message.engine_node_id);
-        ongoing_engine_index_reads_.erase(received_message.engine_node_id);
-    }
-    EngineIndexReadOp* engine_index_read_ops = new EngineIndexReadOp();
-    ongoing_engine_index_reads_[received_message.engine_node_id].reset(engine_index_read_ops);
     HLOG_F(INFO, "Registration ok. engine_id={}", received_message.engine_node_id);
     SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
             SharedLogResultType::REGISTER_INDEX_OK,
@@ -301,58 +295,7 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
 void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
     absl::MutexLock view_lk(&view_mu_);
     view_mutable_.RemoveCurrentEngineNodeId(engine_node_id);
-    if (ongoing_engine_index_reads_.contains(engine_node_id)){
-        ongoing_engine_index_reads_.erase(engine_node_id);
-    }
 }
-
-bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
-    bool isMyResult = index_node_id_other == my_node_id();
-    HVLOG_F(1, "IndexRead: Index result received. is_my_result={}, index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
-        isMyResult, index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
-        bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
-    );
-    DCHECK_NE(index_query_result_other.state, IndexQueryResult::kContinue); //"kContinue cannot be merged"
-    EngineIndexReadOp* engine_index_read_op = nullptr;
-    size_t num_index_shards; 
-    {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        num_index_shards = current_view_->num_index_shards();
-        engine_index_read_op = ongoing_engine_index_reads_.at(index_query_result_other.original_query.origin_node_id).get();
-    }
-    if (engine_index_read_op == nullptr) {
-        HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result_other.original_query.origin_node_id);
-        return false;
-    }
-    return engine_index_read_op->Merge(num_index_shards, index_node_id_other, index_query_result_other, merged_index_query_result);
-}
-
-void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload){
-    DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_INDEX_RESULT || 
-           SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_PREV_INDEX_RESULT ||
-           SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_B_INDEX_RESULT);
-    IndexResultProto index_result_proto;
-    if (!index_result_proto.ParseFromArray(payload.data(),
-                                         static_cast<int>(payload.size()))) {
-        LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
-    }
-    IndexQueryResult slave_index_query_result = BuildIndexResult(message, index_result_proto);
-    IndexQueryResult merged_index_query_result;
-    bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
-    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
-        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
-        ForwardReadRequest(merged_index_query_result);
-    } else if (merge_complete && !merged_index_query_result.IsFound()){
-        HVLOG_F(1, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
-            merged_index_query_result.original_query.DirectionToString(), 
-            merged_index_query_result.original_query.user_logspace, 
-            merged_index_query_result.original_query.user_tag, 
-            bits::HexStr0x(merged_index_query_result.original_query.query_seqnum)
-        );
-        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
-    }
-}
-
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
 #undef IGNORE_IF_FROM_PAST_VIEW
@@ -363,25 +306,8 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
         HVLOG_F(1, "IndexRead: Point hit. Forward read request for query_seqnum={}", bits::HexStr0x(my_query_result.original_query.query_seqnum));
         ForwardReadRequest(my_query_result);
     }
-    if (IsSlave(my_query_result.original_query)){
-        HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), my_query_result.original_query.master_node_id);
-        SendMasterIndexResult(my_query_result);
-        return;
-    }
-    IndexQueryResult merged_index_query_result;
-    bool merge_complete = MergeIndexResult(my_node_id(), my_query_result, &merged_index_query_result);
-    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()) {
-        HVLOG_F(1, "IndexRead: Index result found in index tier. Forward read request for query_seqnum={}", bits::HexStr0x(merged_index_query_result.original_query.query_seqnum));
-        ForwardReadRequest(merged_index_query_result);
-    } else if (merge_complete && !merged_index_query_result.IsFound()){
-        HVLOG_F(1, "IndexRead: No shard was able to find a result for rd={}, logspace={}, tag={}, query_seqnum={}",
-            merged_index_query_result.original_query.DirectionToString(), 
-            merged_index_query_result.original_query.user_logspace, 
-            merged_index_query_result.original_query.user_tag, 
-            bits::HexStr0x(merged_index_query_result.original_query.query_seqnum)
-        );
-        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
-    }
+    HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), my_query_result.original_query.master_node_id);
+    SendMasterIndexResult(my_query_result);
 }
 
 // outdated
@@ -592,88 +518,20 @@ void IndexNode::FlushIndexEntries() {
     // TODO: flushing
 }
 
-IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result){
-    IndexQuery query = BuildIndexQuery(message, gsl::narrow_cast<uint16_t>(result.original_requester_id()));
-    return IndexQueryResult {
-        .state = result.found() ? IndexQueryResult::State::kFound : IndexQueryResult::State::kEmpty,
-        .metalog_progress = query.metalog_progress,
-        .next_view_id = 0,
-        .original_query = query,
-        .found_result = IndexFoundResult {
-            .view_id = gsl::narrow_cast<uint16_t>(result.view_id()),
-            .storage_shard_id = gsl::narrow_cast<uint16_t>(result.storage_shard_id()),
-            .seqnum = result.seqnum()
-        }
-    };
-}
-
-EngineIndexReadOp::EngineIndexReadOp(){
-    log_header_ = "EngineIndexReadOp";
-}
-
-EngineIndexReadOp::~EngineIndexReadOp(){}
-
-bool EngineIndexReadOp::Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
-    const uint64_t key = index_query_result_other.original_query.client_data;
-    OngoingIndexReadsTable::accessor accessor;
-    if (ongoing_index_reads_.insert(accessor, key)) {
-        // HVLOG_F(1, "IndexRead: Create new index read operation for key={}", bits::HexStr0x(key));
-        accessor->second = new IndexReadOp();
-        accessor->second->merged_nodes.insert(index_node_id_other);
-        accessor->second->index_query_result = index_query_result_other;
-    } else {
-        HVLOG_F(1, "IndexRead: Retrieve index read operation for key={}", bits::HexStr0x(key));
-        if(accessor->second->merged_nodes.contains(index_node_id_other)){
-            HLOG_F(ERROR, "IndexRead: Result of index_node={} was already merged", index_node_id_other);
-            return false;
-        }
-        uint64_t mergedResult = accessor->second->index_query_result.found_result.seqnum;
-        uint64_t otherResult = index_query_result_other.found_result.seqnum;
-        HVLOG_F(1, "IndexRead: Merging: merged_result={}, other_result={}", mergedResult, otherResult);
-        if (accessor->second->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kFound){
-            if (mergedResult == otherResult) {
-                LOG(FATAL) << "Due to sharding there can never be the same result if sequence numbers were found";
-            }
-        }
-        if (accessor->second->index_query_result.state == IndexQueryResult::kFound && index_query_result_other.state == IndexQueryResult::kEmpty){
-            // merged result is found, other result is empty
-            HVLOG (1) << "IndexRead: Current result is FOUND, other result is EMPTY";
-        } 
-        else if (accessor->second->index_query_result.state == IndexQueryResult::kEmpty && index_query_result_other.state == IndexQueryResult::kFound) {
-            // merged result is empty, other result is found
-            HVLOG (1) << "IndexRead: Current result is EMPTY, other result is FOUND";
-            accessor->second->index_query_result = index_query_result_other;
-        }
-        else if (accessor->second->index_query_result.original_query.direction == IndexQuery::ReadDirection::kReadPrev){
-            if (mergedResult < otherResult) {
-                // other result is closer
-                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_prev and query_seqnum={}", 
-                    mergedResult, otherResult, bits::HexStr0x(accessor->second->index_query_result.original_query.query_seqnum)
-                );
-                accessor->second->index_query_result = index_query_result_other;
-            }
-        } 
-        else { // readNext, readNextB
-            if (otherResult < mergedResult) {
-                // other result is closer
-                HVLOG_F(1, "IndexRead: Current result is FOUND({}), other result is FOUND({}). Other is closer for read_next and query_seqnum={}", 
-                    mergedResult, otherResult, bits::HexStr0x(accessor->second->index_query_result.original_query.query_seqnum)
-                );
-                accessor->second->index_query_result = index_query_result_other;
-            }
-        }
-        accessor->second->merged_nodes.insert(index_node_id_other);
-        HVLOG_F(1, "IndexRead: Merged {} results. key={}", accessor->second->merged_nodes.size(), bits::HexStr0x(key));
-    }
-    *merged_index_query_result = accessor->second->index_query_result;
-    if(accessor->second->merged_nodes.size() == num_index_shards){
-        accessor.release();
-        ongoing_index_reads_.erase(key);
-        return true;
-    }
-    DCHECK_LT(accessor->second->merged_nodes.size(), num_index_shards);
-    return false;
-}
+// IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result){
+//     IndexQuery query = BuildIndexQuery(message, gsl::narrow_cast<uint16_t>(result.original_requester_id()));
+//     return IndexQueryResult {
+//         .state = result.found() ? IndexQueryResult::State::kFound : IndexQueryResult::State::kEmpty,
+//         .metalog_progress = query.metalog_progress,
+//         .next_view_id = 0,
+//         .original_query = query,
+//         .found_result = IndexFoundResult {
+//             .view_id = gsl::narrow_cast<uint16_t>(result.view_id()),
+//             .storage_shard_id = gsl::narrow_cast<uint16_t>(result.storage_shard_id()),
+//             .seqnum = result.seqnum()
+//         }
+//     };
+// }
 
 }  // namespace log
 }  // namespace faas

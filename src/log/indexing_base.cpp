@@ -65,12 +65,9 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
         (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_PREV)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
+     || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_MIN)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REGISTER)
-     || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
-     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_INDEX_RESULT)
-     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_PREV_INDEX_RESULT)
-     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B_INDEX_RESULT)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
@@ -88,11 +85,6 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     case SharedLogOpType::INDEX_DATA:
         OnRecvNewIndexData(message, payload);
         break;
-    case SharedLogOpType::READ_NEXT_INDEX_RESULT:
-    case SharedLogOpType::READ_PREV_INDEX_RESULT:
-    case SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
-        HandleSlaveResult(message, payload);
-        break;
     case SharedLogOpType::READ_MIN:
         HandleReadMinRequest(message);
         break;
@@ -105,24 +97,24 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     }
 }
 
-namespace {
-static inline std::string SerializedIndexResult(const IndexQueryResult& result) {
-    IndexResultProto index_result_proto;
-    index_result_proto.set_original_requester_id(result.original_query.origin_node_id);
-    if (result.state == IndexQueryResult::kEmpty){
-        DCHECK(result.found_result.seqnum == kInvalidLogSeqNum);
-        index_result_proto.set_found(false);
-    } else {
-        index_result_proto.set_found(true);
-    }
-    index_result_proto.set_view_id(result.found_result.view_id);
-    index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
-    index_result_proto.set_seqnum(result.found_result.seqnum);
-    std::string data;
-    CHECK(index_result_proto.SerializeToString(&data));
-    return data;
-}
-}  // namespace
+// namespace {
+// static inline std::string SerializedIndexResult(const IndexQueryResult& result) {
+//     IndexResultProto index_result_proto;
+//     index_result_proto.set_original_requester_id(result.original_query.origin_node_id);
+//     if (result.state == IndexQueryResult::kEmpty){
+//         DCHECK(result.found_result.seqnum == kInvalidLogSeqNum);
+//         index_result_proto.set_found(false);
+//     } else {
+//         index_result_proto.set_found(true);
+//     }
+//     index_result_proto.set_view_id(result.found_result.view_id);
+//     index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
+//     index_result_proto.set_seqnum(result.found_result.seqnum);
+//     std::string data;
+//     CHECK(index_result_proto.SerializeToString(&data));
+//     return data;
+// }
+// }  // namespace
 
 void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
@@ -130,46 +122,54 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     response.hop_times = result.original_query.hop_times + 1;
     response.client_data = result.original_query.client_data;
     response.user_logspace = result.original_query.user_logspace;
-    response.query_tag = result.original_query.user_tag;
+
+    // response.query_tag = result.original_query.user_tag;
     response.query_seqnum = result.original_query.query_seqnum;
-    //TODO: flags?
-    response.prev_view_id = result.original_query.prev_found_result.view_id;
-    response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    std::string payload = SerializedIndexResult(result);
-    response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+
+    response.user_metalog_progress = result.metalog_progress;
+
+    response.found_view_id = result.found_result.view_id;
+    response.found_storage_shard_id = result.found_result.storage_shard_id;
+    response.found_seqnum = result.found_result.seqnum;
+    response.engine_node_id = result.original_query.origin_node_id;
+
+    // response.prev_view_id = result.original_query.prev_found_result.view_id;
+    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
+    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
+
+    response.payload_size = 0;
     uint16_t master_node_id = result.original_query.master_node_id;
     //master node id cannot be part of sharedlogmessage
     bool success = SendSharedLogMessage(
-        protocol::ConnType::INDEX_TO_INDEX,
-        master_node_id, response, payload);
+        protocol::ConnType::INDEX_TO_MERGER,
+        master_node_id, response);
     if (!success) {
         HLOG_F(WARNING, "IndexRead: Failed to send index result to master index {}", master_node_id);
     }
 }
 
 void IndexBase::SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id) {
-    protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
-    SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
-    response.origin_node_id = my_node_id();
-    response.hop_times = result.original_query.hop_times + 1;
-    response.client_data = result.original_query.client_data;
-    response.logspace_id = logspace_id;
-    response.user_logspace = result.original_query.user_logspace;
-    response.query_tag = result.original_query.user_tag;
-    response.query_seqnum = result.original_query.query_seqnum;
-    response.prev_view_id = result.original_query.prev_found_result.view_id;
-    response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    std::string payload = SerializedIndexResult(result);
-    response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
-    uint16_t engine_id = result.original_query.origin_node_id;
-    bool success = SendSharedLogMessage(
-        protocol::ConnType::INDEX_TO_ENGINE,
-        engine_id, response, payload);
-    if (!success) {
-        HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_id);
-    }
+    // protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
+    // SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
+    // response.origin_node_id = my_node_id();
+    // response.hop_times = result.original_query.hop_times + 1;
+    // response.client_data = result.original_query.client_data;
+    // response.logspace_id = logspace_id;
+    // response.user_logspace = result.original_query.user_logspace;
+    // response.query_tag = result.original_query.user_tag;
+    // response.query_seqnum = result.original_query.query_seqnum;
+    // response.prev_view_id = result.original_query.prev_found_result.view_id;
+    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
+    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
+    // std::string payload = SerializedIndexResult(result);
+    // response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+    // uint16_t engine_id = result.original_query.origin_node_id;
+    // bool success = SendSharedLogMessage(
+    //     protocol::ConnType::INDEX_TO_ENGINE,
+    //     engine_id, response, payload);
+    // if (!success) {
+    //     HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_id);
+    // }
 }
 
 void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id){
@@ -182,9 +182,8 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
     response.query_tag = original_request.query_tag;
     response.seqnum_timestamp = original_request.seqnum_timestamp; // timestamp
 
-    response.storage_shard_id = storage_shard_id;
     response.complete_seqnum = seqnum;
-    response.min_seqnum_storage_shard_id = storage_shard_id;
+    response.found_storage_shard_id = storage_shard_id;
 
     uint16_t engine_destination = original_request.origin_node_id;
     bool success = SendSharedLogMessage(
@@ -196,30 +195,30 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
 }
 
 void IndexBase::BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id) {
-    protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
-    SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
-    response.origin_node_id = my_node_id();
-    response.hop_times = result.original_query.hop_times + 1;
-    response.client_data = result.original_query.client_data;
-    response.logspace_id = logspace_id;
-    response.user_logspace = result.original_query.user_logspace;
-    response.query_tag = result.original_query.user_tag;
-    response.query_seqnum = result.original_query.query_seqnum;
-    response.prev_view_id = result.original_query.prev_found_result.view_id;
-    response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    std::string payload = SerializedIndexResult(result);
-    response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
-    bool success = true;
-    for (uint16_t engine_id : engine_ids){
-        success &= SendSharedLogMessage(
-            protocol::ConnType::INDEX_TO_ENGINE,
-            engine_id, response, payload
-        );
-    }
-    if (!success) {
-        HLOG(WARNING) << "IndexRead: Failed to send index read response to all engines";
-    }
+    // protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
+    // SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
+    // response.origin_node_id = my_node_id();
+    // response.hop_times = result.original_query.hop_times + 1;
+    // response.client_data = result.original_query.client_data;
+    // response.logspace_id = logspace_id;
+    // response.user_logspace = result.original_query.user_logspace;
+    // response.query_tag = result.original_query.user_tag;
+    // response.query_seqnum = result.original_query.query_seqnum;
+    // response.prev_view_id = result.original_query.prev_found_result.view_id;
+    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
+    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
+    // std::string payload = SerializedIndexResult(result);
+    // response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
+    // bool success = true;
+    // for (uint16_t engine_id : engine_ids){
+    //     success &= SendSharedLogMessage(
+    //         protocol::ConnType::INDEX_TO_ENGINE,
+    //         engine_id, response, payload
+    //     );
+    // }
+    // if (!success) {
+    //     HLOG(WARNING) << "IndexRead: Failed to send index read response to all engines";
+    // }
 }
 
 void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {
@@ -288,10 +287,6 @@ bool IndexBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_
     return true;
 }
 
-bool IndexBase::IsSlave(IndexQuery index_query){
-    return my_node_id() != index_query.master_node_id;
-}
-
 void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
                                       int sockfd) {
     protocol::ConnType type = static_cast<protocol::ConnType>(handshake.conn_type);
@@ -304,7 +299,7 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
     case protocol::ConnType::STORAGE_TO_INDEX:
         HVLOG(1) << "ConnectionType: StorageToIndex";
         break;
-    case protocol::ConnType::INDEX_TO_INDEX:
+    case protocol::ConnType::INDEX_TO_MERGER:
         HVLOG(1) << "ConnectionType: IndexToIndex";
         break;
     default:
@@ -333,13 +328,13 @@ void IndexBase::OnConnectionClose(ConnectionBase* connection) {
     switch (connection->type() & kConnectionTypeMask) {
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
-    case kIndexIngressTypeId:
+    case kMergerIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
-    case kIndexEgressHubTypeId:
+    case kMergerEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));

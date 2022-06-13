@@ -19,5 +19,6 @@ COPY --from=builder /slog/bin/release/sequencer  /slog/sequencer
 COPY --from=builder /slog/bin/release/storage    /slog/storage
 COPY --from=builder /slog/bin/release/controller /slog/controller
 COPY --from=builder /slog/bin/release/index      /slog/index
+COPY --from=builder /slog/bin/release/merger     /slog/merger
 
 WORKDIR /slog

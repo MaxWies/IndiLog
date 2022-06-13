@@ -13,7 +13,8 @@ enum NodeType {
     kSequencerNode = 2,
     kStorageNode   = 3,
     kIndexNode     = 4,
-    kTotalNodeType = 5
+    kMergerNode    = 5,
+    kTotalNodeType = 6
 };
 
 static constexpr const char* kNodeTypeStr[] = {
@@ -21,7 +22,8 @@ static constexpr const char* kNodeTypeStr[] = {
     "EngineNode",
     "SequencerNode",
     "StorageNode",
-    "IndexNode"
+    "IndexNode",
+    "MergerNode"
 };
 
 

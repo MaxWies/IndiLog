@@ -8,12 +8,14 @@ View::View(const ViewProto& view_proto)
       metalog_replicas_(view_proto.metalog_replicas()),
       userlog_replicas_(view_proto.userlog_replicas()),
       index_replicas_(view_proto.index_replicas()),
+      merger_replicas_(view_proto.merger_replicas()),
       num_index_shards_(view_proto.num_index_shards()),
       num_phylogs_(view_proto.num_phylogs()),
       storage_shards_per_sequencer_(static_cast<size_t>(view_proto.storage_shard_ids_size())),
       sequencer_node_ids_(static_cast<size_t>(view_proto.sequencer_nodes_size())),
       storage_node_ids_(static_cast<size_t>(view_proto.storage_nodes_size())),
       index_node_ids_(static_cast<size_t>(view_proto.index_nodes_size())),
+      merger_node_ids_(static_cast<size_t>(view_proto.merger_nodes_size())),
       local_storage_shard_ids_(static_cast<size_t>(view_proto.storage_shard_ids_size())),
       global_storage_shard_ids_(static_cast<size_t>(view_proto.index_nodes_size()) * static_cast<size_t>(view_proto.num_phylogs())),
       log_space_hash_seed_(view_proto.log_space_hash_seed()),
@@ -34,6 +36,10 @@ View::View(const ViewProto& view_proto)
     for (size_t i = 0; i < index_node_ids_.size(); i++) {
         index_node_ids_[i] = gsl::narrow_cast<uint16_t>(
             view_proto.index_nodes(static_cast<int>(i)));
+    }
+    for (size_t i = 0; i < merger_node_ids_.size(); i++) {
+        merger_node_ids_[i] = gsl::narrow_cast<uint16_t>(
+            view_proto.merger_nodes(static_cast<int>(i)));
     }
     for (size_t i = 0; i < local_storage_shard_ids_.size(); i++) {
         local_storage_shard_ids_[i] = gsl::narrow_cast<uint16_t>(
@@ -120,7 +126,8 @@ View::View(const ViewProto& view_proto)
                 NodeIdVec(storage_nodes[global_storage_shard_id].begin(),
                         storage_nodes[global_storage_shard_id].end()),
                 sequencer_node,
-                index_shard_nodes));
+                index_shard_nodes,
+                merger_node_ids_));
         }
     }
 
@@ -183,10 +190,12 @@ View::View(const ViewProto& view_proto)
 View::StorageShard::StorageShard(const View* view, uint32_t shard_id,
                      const View::NodeIdVec& storage_nodes,
                      const uint16_t sequencer_node,
-                     const std::vector<View::NodeIdVec>& index_shard_nodes)
+                     const std::vector<View::NodeIdVec>& index_shard_nodes,
+                     const View::NodeIdVec& merger_nodes)
     : view_(view),
       shard_id_(shard_id),
       storage_nodes_(storage_nodes),
+      merger_nodes_(merger_nodes),
       sequencer_node_(sequencer_node),
       index_shard_nodes_(index_shard_nodes),
       next_storage_node_(0) {

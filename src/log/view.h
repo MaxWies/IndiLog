@@ -24,11 +24,13 @@ public:
     size_t userlog_replicas() const { return userlog_replicas_; }
     size_t index_replicas() const { return index_replicas_; }
     size_t num_index_shards() const { return num_index_shards_; }
+    size_t merger_replicas() const { return merger_replicas_; }
     size_t num_phylogs() const { return num_phylogs_; }
 
     size_t num_sequencer_nodes() const { return sequencer_node_ids_.size(); }
     size_t num_storage_nodes() const { return storage_node_ids_.size(); }
     size_t num_index_nodes() const { return index_node_ids_.size(); }
+    size_t num_merger_nodes() const { return merger_node_ids_.size(); }
     size_t num_local_storage_shards() const { return local_storage_shard_ids_.size(); }
     size_t num_global_storage_shards() const { return global_storage_shard_ids_.size(); }
 
@@ -38,6 +40,7 @@ public:
     const NodeIdVec& GetSequencerNodes() const { return sequencer_node_ids_; }
     const NodeIdVec& GetStorageNodes() const { return storage_node_ids_; }
     const NodeIdVec& GetIndexNodes() const { return index_node_ids_; }
+    const NodeIdVec& GetMergerNodes() const { return merger_node_ids_; }
     const NodeIdVec& GetLocalStorageShardIds() const {return local_storage_shard_ids_;}
     const ShardIdVec& GetGlobalStorageShardIds() const {return global_storage_shard_ids_;}
 
@@ -128,8 +131,13 @@ public:
             return index_nodes.at(static_cast<size_t>(std::rand()) % index_nodes.size());
         }
 
+        uint16_t PickMergerNode() const {
+            size_t idx = __atomic_fetch_add(&next_merger_node_, 1, __ATOMIC_RELAXED);
+            return merger_nodes_.at(idx % merger_nodes_.size());
+        }
+
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {
-            size_t first_shard = PickIndexShard(); // node of shard is master
+            size_t first_shard = PickIndexShard();
             for (size_t i = first_shard; i < view_->num_index_shards_ + first_shard ; i++) {
                 size_t shard = i % view_->num_index_shards_;
                 DCHECK_LE(shard, static_cast<size_t>(view_->num_index_shards_ - 1));
@@ -144,6 +152,7 @@ public:
         uint32_t shard_id_; /*sequencer_id||storage_shard_id*/
 
         View::NodeIdVec storage_nodes_;
+        View::NodeIdVec merger_nodes_;
         uint16_t sequencer_node_;
 
         mutable std::vector<size_t> next_index_replica_node_;
@@ -151,11 +160,13 @@ public:
 
         mutable size_t next_index_shard;
         mutable size_t next_storage_node_;
+        mutable size_t next_merger_node_;
 
         StorageShard(const View* view, uint32_t shard_id,
                const View::NodeIdVec& storage_nodes,
                const uint16_t sequencer_node,
-               const std::vector<View::NodeIdVec>& index_shard_nodes);
+               const std::vector<View::NodeIdVec>& index_shard_nodes,
+               const View::NodeIdVec& merger_nodes);
         DISALLOW_IMPLICIT_CONSTRUCTORS(StorageShard);
     };
 
@@ -306,6 +317,7 @@ private:
     size_t metalog_replicas_;
     size_t userlog_replicas_;
     size_t index_replicas_;
+    size_t merger_replicas_;
     size_t num_index_shards_;
     size_t num_phylogs_;
     size_t storage_shards_per_sequencer_;
@@ -313,6 +325,7 @@ private:
     NodeIdVec sequencer_node_ids_;
     NodeIdVec storage_node_ids_;
     NodeIdVec index_node_ids_;
+    NodeIdVec merger_node_ids_;
     NodeIdVec local_storage_shard_ids_;
     ShardIdVec global_storage_shard_ids_;
 
@@ -339,9 +352,10 @@ private:
 
 class EngineConnection {
 public:
-    EngineConnection(size_t num_storage_nodes, size_t num_index_nodes) : 
+    EngineConnection(size_t num_storage_nodes, size_t num_index_nodes, size_t num_merger_nodes) : 
         num_storage_nodes_(num_storage_nodes),
         num_index_nodes_(num_index_nodes),
+        num_merger_nodes_(num_merger_nodes),
         local_start_id_(0),
         sequencer_node_(0),
         sequencer_node_set_(false)
@@ -365,6 +379,10 @@ public:
         index_nodes_.insert(index_node);
     }
 
+    void AddMergerNode(uint16_t merger_node){
+        merger_nodes_.insert(merger_node);
+    }
+
     bool StorageNodesReady(){
         return storage_nodes_.size() == num_storage_nodes_;
     }
@@ -373,8 +391,12 @@ public:
         return index_nodes_.size() == num_index_nodes_;
     }
 
+    bool MergerNodesReady(){
+        return merger_nodes_.size() == num_merger_nodes_;
+    }
+
     bool IsReady(){
-        return sequencer_node_set_ && StorageNodesReady() && IndexNodesReady();
+        return sequencer_node_set_ && StorageNodesReady() && IndexNodesReady() && MergerNodesReady();
     }
 
     uint32_t GetLocalStartId(){
@@ -384,10 +406,12 @@ public:
 private:
     size_t num_storage_nodes_;
     size_t num_index_nodes_;
+    size_t num_merger_nodes_;
     uint32_t local_start_id_;
 
     absl::flat_hash_set<uint16_t> storage_nodes_;
     absl::flat_hash_set<uint16_t> index_nodes_;
+    absl::flat_hash_set<uint16_t> merger_nodes_;
     uint16_t sequencer_node_;
     bool sequencer_node_set_;
     bool local_start_id_set_;
@@ -439,14 +463,14 @@ public:
         return true;
     }
 
-    void CreateEngineConnection(uint32_t logspace, size_t num_storage_nodes, size_t num_index_nodes){
+    void CreateEngineConnection(uint32_t logspace, size_t num_storage_nodes, size_t num_index_nodes, size_t num_merger_nodes){
         if(engine_connections_.contains(logspace)){
             // todo: is that ok?
             engine_connections_.erase(logspace);
         }
         engine_connections_.insert({
             logspace,
-            new EngineConnection(num_storage_nodes, num_index_nodes)
+            new EngineConnection(num_storage_nodes, num_index_nodes, num_merger_nodes)
         });
     }
 
@@ -467,6 +491,16 @@ public:
         }
         EngineConnection* connection = engine_connections_.at(logspace);
         connection->AddIndexNode(index_node_id);
+        return connection->IsReady();
+    }
+
+    bool UpdateMergerConnections(uint32_t logspace, uint16_t merger_node_id){
+        if (!engine_connections_.contains(logspace)){
+            LOG_F(ERROR, "logspace={} is unknown", logspace);
+            return false;
+        }
+        EngineConnection* connection = engine_connections_.at(logspace);
+        connection->AddMergerNode(merger_node_id);
         return connection->IsReady();
     }
 

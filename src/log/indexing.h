@@ -18,18 +18,7 @@ struct PerTagMinSeqnum {
     uint16_t storage_shard_id;
 };
 
-typedef tbb::concurrent_hash_map<uint64_t, IndexReadOp*> OngoingIndexReadsTable;
 typedef tbb::concurrent_hash_map<uint64_t, PerTagMinSeqnum> PerTagMinSeqnumTable;
-
-class EngineIndexReadOp {
-public:
-    EngineIndexReadOp();
-    ~EngineIndexReadOp();
-    bool Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
-private:
-    std::string log_header_;
-    OngoingIndexReadsTable ongoing_index_reads_;
-};
 
 class IndexNode final : public IndexBase {
 public:
@@ -48,7 +37,6 @@ private:
         index_collection_        ABSL_GUARDED_BY(view_mu_);
 
     log_utils::FutureRequests future_requests_;
-    absl::flat_hash_map</*engine_id*/uint16_t, std::unique_ptr<EngineIndexReadOp>> ongoing_engine_index_reads_ ABSL_GUARDED_BY(view_mu_);
 
     bool per_tag_seqnum_min_completion_;
     PerTagMinSeqnumTable per_tag_min_seqnum_table_;
@@ -63,9 +51,6 @@ private:
                             std::span<const char> payload) override;
     void FilterNewTags(const View* view, uint32_t logspace_id, const IndexDataProto& index_data_proto);
     void OnRecvRegistration(const protocol::SharedLogMessage& message) override;
-
-    bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
-    void HandleSlaveResult(const protocol::SharedLogMessage& message, std::span<const char> payload) override;
 
     void RemoveEngineNode(uint16_t engine_node_id) override;
 
@@ -88,7 +73,7 @@ private:
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message, const uint16_t original_requester_id);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
 
-    IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result);
+    // IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result);
 
     DISALLOW_COPY_AND_ASSIGN(IndexNode);
 };

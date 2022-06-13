@@ -87,7 +87,8 @@ void Engine::OnViewCreated(const View* view) {
             view_mutable_.CreateEngineConnection(
                 bits::JoinTwo16(view->id(), sequencer_id), 
                 view->num_storage_nodes(),
-                view->num_index_nodes()
+                view->num_index_nodes(),
+                view->num_merger_nodes()
             );
             // apply for shard
             std::string znode_path_shard_req = fmt::format("storage_shard_req/{}_{}_{}", view->id(), sequencer_id, my_node_id());
@@ -378,7 +379,7 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
     HVLOG(1) << "Send request to index tier";
     std::vector<uint16_t> index_nodes;
     storage_shard->PickIndexNodePerShard(index_nodes);
-    uint16_t master_index_node = index_nodes.at(gsl::narrow_cast<size_t>(std::rand() % static_cast<int>(index_nodes.size())));
+    uint16_t master_index_node = storage_shard->PickMergerNode();
     SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
@@ -802,7 +803,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             pending_min_tags_.push_back(PendingMinTag{
                 message.query_tag,
                 message.complete_seqnum,
-                message.min_seqnum_storage_shard_id,
+                message.found_storage_shard_id,
                 message.user_logspace,
                 message.seqnum_timestamp
             });
@@ -829,6 +830,11 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
     }
     if(result == protocol::SharedLogResultType::REGISTER_INDEX_FAILED){
         HLOG_F(ERROR, "Registration at index_node={} failed. registration_view={}, response_view={}", 
+            received_message.origin_node_id, current_view_->id(), received_message.view_id);
+        return;
+    }
+    if(result == protocol::SharedLogResultType::REGISTER_MERGER_FAILED){
+        HLOG_F(ERROR, "Registration at merger_node={} failed. registration_view={}, response_view={}", 
             received_message.origin_node_id, current_view_->id(), received_message.view_id);
         return;
     }
@@ -866,13 +872,19 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
                     my_node_id(), index_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
                 SendRegistrationRequest(index_node_id, protocol::ConnType::ENGINE_TO_INDEX, &request);
             }
+            const View::NodeIdVec merger_node_ids = current_view_->GetMergerNodes();
+            for(uint16_t merger_node_id : merger_node_ids){
+                HVLOG_F(1, "Send registration request to merger node. engine_node={}, merger_node_id={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
+                    my_node_id(), merger_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
+                SendRegistrationRequest(merger_node_id, protocol::ConnType::ENGINE_TO_MERGER, &request);
+            }
         }
     }
     else if(result == protocol::SharedLogResultType::REGISTER_STORAGE_OK){
         HLOG_F(INFO, "Registered at storage node. storage_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
-            HLOG(INFO) << "Registered at all storage and index nodes. Unblock shard at sequencer node";
+            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.storage_shard_id, received_message.engine_node_id,
@@ -885,7 +897,20 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         HLOG_F(INFO, "Registered at index node. index_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateIndexConnections(logspace_id, received_message.origin_node_id)){
-            HLOG(INFO) << "Registered at all storage and index nodes. Unblock shard at sequencer node";
+            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
+            SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
+                SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
+                received_message.storage_shard_id, received_message.engine_node_id,
+                /* local_start_id*/ view_mutable_.GetLocalStartOfConnection(logspace_id)
+            );
+            SendRegistrationRequest(received_message.sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
+        }
+    }
+    else if (result == protocol::SharedLogResultType::REGISTER_MERGER_OK) {
+        HLOG_F(INFO, "Registered at merger node. merger_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
+            received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
+        if(view_mutable_.UpdateMergerConnections(logspace_id, received_message.origin_node_id)){
+            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.storage_shard_id, received_message.engine_node_id,

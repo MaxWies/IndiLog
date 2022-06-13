@@ -59,6 +59,9 @@ bool NodeWatcher::ParseNodePath(std::string_view path,
     } else if (absl::StartsWith(path, "index_")) {
         prefix = "index_";
         *node_type = NodeType::kIndexNode;
+    } else if (absl::StartsWith(path, "merger_")) {
+        prefix = "merger_";
+        *node_type = NodeType::kMergerNode;
     } else {
         LOG(ERROR) << "Unknown type of node: " << path;
         return false;
@@ -133,7 +136,10 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::INDEX_TO_ENGINE,        NODE_PAIR(Index, Engine) },
     { ConnType::STORAGE_TO_INDEX,       NODE_PAIR(Storage, Index) },
     { ConnType::INDEX_TO_STORAGE,       NODE_PAIR(Index, Storage) },
-    { ConnType::INDEX_TO_INDEX,         NODE_PAIR(Index, Index) }
+    { ConnType::INDEX_TO_MERGER,        NODE_PAIR(Index, Merger) },
+    { ConnType::ENGINE_TO_MERGER,       NODE_PAIR(Engine, Merger) },
+    { ConnType::MERGER_TO_ENGINE,       NODE_PAIR(Merger, Engine) },
+    { ConnType::MERGER_TO_STORAGE,      NODE_PAIR(Merger, Storage) },
 };
 
 #undef NODE_PAIR

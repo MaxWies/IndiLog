@@ -97,6 +97,10 @@ void Controller::ReconfigView(const Configuration& configuration) {
         HLOG(ERROR) << "Index nodes not enough";
         return;
     }
+    if (configuration.merger_nodes.size() < merger_replicas_) {
+        HLOG(ERROR) << "Merger nodes not enough";
+        return;
+    }
 
     if (state_ == kNormal) {
         DCHECK(!views_.empty());
@@ -129,6 +133,7 @@ void Controller::ReconfigView(const Configuration& configuration) {
     view_proto.set_userlog_replicas(gsl::narrow_cast<uint32_t>(userlog_replicas_));
     view_proto.set_index_replicas(gsl::narrow_cast<uint32_t>(index_replicas_));
     view_proto.set_num_index_shards(gsl::narrow_cast<uint32_t>(index_shards_));
+    view_proto.set_merger_replicas(gsl::narrow_cast<uint32_t>(merger_replicas_));
     view_proto.set_num_phylogs(gsl::narrow_cast<uint32_t>(configuration.num_phylogs));
     for (uint16_t node_id : configuration.sequencer_nodes) {
         view_proto.add_sequencer_nodes(node_id);
@@ -138,6 +143,9 @@ void Controller::ReconfigView(const Configuration& configuration) {
     }
     for (uint16_t node_id : configuration.index_nodes) {
         view_proto.add_index_nodes(node_id);
+    }
+    for (uint16_t node_id : configuration.merger_nodes) {
+        view_proto.add_merger_nodes(node_id);
     }
     for (size_t i = 0; i < max_num_storage_shards_; i++){
         view_proto.add_storage_shard_ids(gsl::narrow_cast<uint16_t>(i));
@@ -247,6 +255,9 @@ void Controller::OnNodeOnline(NodeType node_type, uint16_t node_id) {
     case NodeType::kIndexNode:
         index_nodes_.insert(node_id);
         break;
+    case NodeType::kMergerNode:
+        merger_nodes_.insert(node_id);
+        break;
     default:
         break;
     }
@@ -265,6 +276,9 @@ void Controller::OnNodeOffline(NodeType node_type, uint16_t node_id) {
         break;
     case NodeType::kIndexNode:
         index_nodes_.erase(node_id);
+        break;
+    case NodeType::kMergerNode:
+        merger_nodes_.erase(node_id);
         break;
     default:
         break;
@@ -309,6 +323,7 @@ void Controller::StartCommandHandler() {
     NodeIdVec sequencer_nodes(sequencer_nodes_.begin(), sequencer_nodes_.end());
     NodeIdVec storage_nodes(storage_nodes_.begin(), storage_nodes_.end());
     NodeIdVec index_nodes(index_nodes_.begin(), index_nodes_.end());
+    NodeIdVec merger_nodes(merger_nodes_.begin(), merger_nodes_.end());
 
     log_space_hash_seed_ = hash::xxHash64(rnd_gen_());
     log_space_hash_tokens_.resize(absl::GetFlag(FLAGS_slog_log_space_hash_tokens));
@@ -327,7 +342,8 @@ void Controller::StartCommandHandler() {
         .num_phylogs     = num_phylogs_,
         .sequencer_nodes = std::move(sequencer_nodes),
         .storage_nodes   = std::move(storage_nodes),
-        .index_nodes     = std::move(index_nodes)
+        .index_nodes     = std::move(index_nodes),
+        .merger_nodes    = std::move(merger_nodes)
     };
     ReconfigView(configuration);
 }
@@ -361,6 +377,7 @@ void Controller::InfoCommandHandler() {
         stream << "  UserLogReplica = " << view->userlog_replicas() << "\n";
         stream << "  IndexReplica = " << view->index_replicas() << "\n";
         stream << "  IndexShards = " << view->num_index_shards() << "\n";
+        stream << "  MergerShards = " << view->metalog_replicas() << "\n";
         stream << "  NumPhyLogs = " << view->num_phylogs() << "\n";
         stream << "  Sequencers = [";
         for (uint16_t sequencer_id : view->GetSequencerNodes()) {
@@ -380,6 +397,10 @@ void Controller::InfoCommandHandler() {
         stream << "  Indexes = [";
         for (uint16_t index_id : view->GetIndexNodes()) {
             stream << index_id << ", ";
+        }
+        stream << "  Merger = [";
+        for (uint16_t merger_id : view->GetMergerNodes()) {
+            stream << merger_id << ", ";
         }
         stream << "]\n";
     }
@@ -446,6 +467,12 @@ void Controller::ReconfigCommandHandler(std::string inputs) {
         view->GetIndexNodes().end());
     std::shuffle(configuration.index_nodes.begin(),
                  configuration.index_nodes.end(),
+                 rnd_gen_);
+    configuration.merger_nodes.assign(
+        view->GetMergerNodes().begin(),
+        view->GetMergerNodes().end());
+    std::shuffle(configuration.merger_nodes.begin(),
+                 configuration.merger_nodes.end(),
                  rnd_gen_);
 
     std::vector<std::string_view> parts = absl::StrSplit(inputs, ' ');

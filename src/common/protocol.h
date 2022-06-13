@@ -132,7 +132,9 @@ enum class SharedLogResultType : uint16_t {
     REGISTER_SEQUENCER_FAILED = 0x45,
     REGISTER_UNBLOCK = 0x46,
     REGISTER_INDEX_OK = 0x47,
-    REGISTER_INDEX_FAILED = 0x48
+    REGISTER_INDEX_FAILED = 0x48,
+    REGISTER_MERGER_OK = 0x49,
+    REGISTER_MERGER_FAILED = 0x50
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -207,7 +209,10 @@ enum class ConnType : uint16_t {
     INDEX_TO_ENGINE        = 11,  // Index response
     STORAGE_TO_INDEX       = 12,  // Index update
     INDEX_TO_STORAGE       = 13,  // Forward read request
-    INDEX_TO_INDEX         = 14,  // Master slave indexing
+    INDEX_TO_MERGER        = 14,  // Master slave indexing
+    MERGER_TO_STORAGE      = 15,  // Forward read request
+    MERGER_TO_ENGINE       = 16,  // Index fail response
+    ENGINE_TO_MERGER       = 17,  // Registration
 };
 
 struct HandshakeMessage {
@@ -280,8 +285,8 @@ struct SharedLogMessage {
             uint16_t prev_shard_id;
         } __attribute__ ((packed));
         struct {
-            uint16_t min_seqnum_storage_shard_id; // (only used by MIN SEQNUM RESPONSE)
-            uint16_t __padding__;
+            uint16_t found_storage_shard_id; // (used by MIN SEQNUM RESPONSE and MERGING)
+            uint16_t found_view_id; // (used by MERGING)
         } __attribute__ ((packed));
         struct {
             uint16_t use_master_node_id;
@@ -295,7 +300,7 @@ struct SharedLogMessage {
             uint16_t num_tags;          // [24:26]
             uint16_t aux_data_size;     // [26:28]
             uint16_t storage_shard_id;  // [28:30] (only used by REGISTRATION | STORAGE_READ feedback)
-            uint16_t engine_node_id;    // [26:28] (only used by REGISTRATION)
+            uint16_t engine_node_id;    // [26:28] (used by REGISTRATION | MERGING)
         } __attribute__ ((packed));
     };
 
@@ -305,13 +310,14 @@ struct SharedLogMessage {
         uint64_t localid;           // [40:48]
         uint64_t query_seqnum;      // [40:48]
         uint64_t trim_seqnum;       // [40:48]
-        uint64_t complete_seqnum;   // [40:48] (only used by MIN SEQNUM RESPONSE)
+        uint64_t complete_seqnum;   // [40:48] (only used by MIN SEQNUM RESPONSE) //todo change to min seqnum
     };
     uint64_t client_data;       // [48:56]
 
     union {
         uint64_t prev_found_seqnum; // [56:64]
         uint64_t seqnum_timestamp;  // [56:64] (only used by Index Tier MIN requests)
+        uint64_t found_seqnum; // [56:64] (only used by MERGING)
     };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
