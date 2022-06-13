@@ -247,6 +247,9 @@ void Engine::OnActivateCaching(){
                 ptr->Clear();
             }
         );
+        if (seqnum_cache_.has_value()){
+            seqnum_cache_->Clear();
+        }
     }
 }
 
@@ -358,9 +361,6 @@ void Engine::HandleLocalAppend(LocalOp* op) {
                 }
             }
         }
-        if (0 < next_seqnum) {
-            --next_seqnum; // get the tail
-        }
         for (uint64_t tag : tags_without_min_seqnum) {
             HVLOG_F(1, "No seqnum for tag={}. Send index request", tag);
             HandleIndexTierMinSeqnumRead(op, tag, view->id(), next_seqnum, storage_shard);
@@ -378,19 +378,16 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
     HVLOG(1) << "Send request to index tier";
     std::vector<uint16_t> index_nodes;
     storage_shard->PickIndexNodePerShard(index_nodes);
-    uint16_t master_index_node = index_nodes.at(0);
+    uint16_t master_index_node = index_nodes.at(gsl::narrow_cast<size_t>(std::rand() % static_cast<int>(index_nodes.size())));
     SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
     bool send_success = true;
-    std::ostringstream os;
     for(uint16_t index_node : index_nodes){
         send_success &= SendIndexTierReadRequest(index_node, &request);
-        os << index_node << ",";
     }
-    std::string index_nodes_str(os.str());
     if (!send_success) {
-        HLOG_F(WARNING, "Failed to send index tier request. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+        HLOG_F(WARNING, "Failed to send index tier request. Master {}", master_index_node);
         onging_reads_.RemoveChecked(op->id);
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
@@ -401,14 +398,14 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
 #ifdef __FAAS_OP_TRACING
     SaveTracePoint(op->id, "SentIndexTierReadRequest");
 #endif
-    HVLOG_F(1, "Sent request to index tier successfully. Index nodes {}. Master {}", index_nodes_str, master_index_node);
+    HVLOG_F(1, "Sent request to index tier successfully. Master {}", master_index_node);
     return;
 }
 
-void Engine::HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, uint64_t log_tail_seqnum, const View::StorageShard* storage_shard) {
+void Engine::HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, uint64_t log_tail_timestamp, const View::StorageShard* storage_shard) {
     HVLOG(1) << "Send seqnum min request to index tier";
     uint16_t index_node = storage_shard->PickIndexNodeByTag(tag);
-    SharedLogMessage request = BuildIndexTierMinSeqnumRequestMessage(op, tag, log_tail_seqnum);
+    SharedLogMessage request = BuildIndexTierMinSeqnumRequestMessage(op, tag, log_tail_timestamp);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
     bool send_success = SendIndexTierReadRequest(index_node, &request);
@@ -649,8 +646,8 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
                                 std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
     HVLOG_F(1, "New index data from storage node {}", message.origin_node_id);
-    IndexDataProto index_data_proto;
-    if (!index_data_proto.ParseFromArray(payload.data(),
+    IndexDataPackagesProto index_data_packages_proto;
+    if (!index_data_packages_proto.ParseFromArray(payload.data(),
                                          static_cast<int>(payload.size()))) {
         LOG(FATAL) << "Failed to parse IndexDataProto";
     }
@@ -668,7 +665,9 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
         DCHECK(message.view_id < views_.size());
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             absl::ReaderMutexLock view_lk(&view_mu_);
-            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, 
+                index_data_packages_proto.index_data_proto().at(index_data_packages_proto.index_data_proto_size()-1).metalog_position()
+            );
             ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
             std::vector<PendingMinTag> pending_min_tags;
             if (min_seqnum_tag_completion_)
@@ -681,22 +680,29 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
             auto tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(message.sequencer_id);
             {
                 auto locked_tag_cache = tag_cache_ptr.Lock();
-                locked_tag_cache->ProvideIndexData(
-                    message.view_id,
-                    index_data_proto,
-                    pending_min_tags
-                );
+                for (const IndexDataProto& index_data_proto : index_data_packages_proto.index_data_proto()){
+                    locked_tag_cache->ProvideIndexData(
+                        message.view_id,
+                        index_data_proto,
+                        pending_min_tags
+                    );
+                }
+                locked_tag_cache->AdvanceIndexProgress(message.view_id);
                 locked_tag_cache->PollQueryResults(&query_results);
             }
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
             absl::ReaderMutexLock view_lk(&view_mu_);
-            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
+            IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, 
+                index_data_packages_proto.index_data_proto().at(index_data_packages_proto.index_data_proto_size()-1).metalog_position()
+            );
             ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
             // feed complete index
             auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
             {
                 auto locked_index = index_ptr.Lock();
-                locked_index->ProvideIndexData(index_data_proto);
+                for (const IndexDataProto& index_data_proto : index_data_packages_proto.index_data_proto()){
+                    locked_index->ProvideIndexData(index_data_proto);
+                }
                 locked_index->AdvanceIndexProgress();
                 locked_index->PollQueryResults(&query_results);
             }
@@ -784,11 +790,6 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
     } else if (   result == SharedLogResultType::INDEX_OK
                || result == SharedLogResultType::INDEX_MIN_OK
                || result == SharedLogResultType::INDEX_MIN_FAILED) {
-        IndexResultProto index_result_proto;
-        if (!index_result_proto.ParseFromArray(payload.data(),
-                                        static_cast<int>(payload.size()))) {
-            LOG(FATAL) << "IndexRead: Failed to parse IndexFoundResultProto";
-        }
         if (result == SharedLogResultType::INDEX_MIN_OK) {
             if (!min_seqnum_tag_completion_) {
                 LOG(ERROR) << "Min seqnum completion is deactivated";
@@ -800,9 +801,10 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             absl::MutexLock min_tag_lk(&min_tag_mu_);
             pending_min_tags_.push_back(PendingMinTag{
                 message.query_tag,
-                index_result_proto.seqnum(),
-                gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()),
-                message.user_logspace
+                message.complete_seqnum,
+                message.min_seqnum_storage_shard_id,
+                message.user_logspace,
+                message.seqnum_timestamp
             });
         } else if (result == SharedLogResultType::INDEX_MIN_FAILED) {
             LOG_F(ERROR, "Seqnum min request at index node for tag {} failed", message.origin_node_id, message.query_tag);
@@ -1190,7 +1192,7 @@ SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t 
     return request;
 }
 
-SharedLogMessage Engine::BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag, uint64_t log_tail_seqnum) {
+SharedLogMessage Engine::BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag, uint64_t seqnum_timestamp) {
     SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(SharedLogOpType::READ_MIN);
     request.origin_node_id = my_node_id();
     request.hop_times = 1;
@@ -1202,7 +1204,7 @@ SharedLogMessage Engine::BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint
     request.flags |= protocol::kReadInitialFlag;
     request.prev_view_id = 0;
     request.prev_shard_id = 0;
-    request.tail_seqnum = log_tail_seqnum;
+    request.seqnum_timestamp = seqnum_timestamp;
     return request;
 }
 

@@ -18,7 +18,8 @@ IndexNode::IndexNode(uint16_t node_id)
     : IndexBase(node_id),
       log_header_(fmt::format("Index[{}-N]: ", node_id)),
       current_view_(nullptr),
-      current_view_active_(false) {}
+      current_view_active_(false),
+      per_tag_seqnum_min_completion_(absl::GetFlag(FLAGS_slog_activate_min_seqnum_completion)) {}
 
 IndexNode::~IndexNode() {}
 
@@ -40,7 +41,7 @@ void IndexNode::OnViewCreated(const View* view) {
                 }
                 //TODO: currently all index nodes have index for sequencer
                 HLOG_F(INFO, "Create logspace for view {} and sequencer {}", view->id(), sequencer_id);
-                index_collection_.InstallLogSpace(std::make_unique<Index>(view, sequencer_id));
+                index_collection_.InstallLogSpace(std::make_unique<Index>(view, sequencer_id, my_node_id() % view->num_index_shards(), view->num_index_shards()));
                 view_mutable_.InitializeCurrentEngineNodeIds(sequencer_id);
             }
         }
@@ -166,84 +167,95 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
 void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
     DCHECK(op_type == SharedLogOpType::READ_MIN);
-    IndexQuery query = BuildIndexQuery(request, request.origin_node_id);
-    LockablePtr<Index> index_ptr;
+    if (!per_tag_seqnum_min_completion_) {
+        LOG(FATAL) << "Per tag min seqnum completion is deactivated";
+    }
+    HVLOG_F(1, "IndexRead: Make query for min seqnum tag={}", request.query_tag);
+    uint64_t found_seqnum = kInvalidLogSeqNum;
+    uint16_t found_storage_shard_id = 0;
+    PerTagMinSeqnumTable::const_accessor accessor;
     {
-        absl::ReaderMutexLock view_lk(&view_mu_);
-        ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
-        index_ptr = index_collection_.GetLogSpaceChecked(request.logspace_id);
-    }
-    if (index_ptr != nullptr) {
-        HVLOG_F(1, "IndexRead: Make query for min seqnum. seqnum={}, logspace={}, tag={}", bits::HexStr0x(query.query_seqnum), request.logspace_id, query.user_tag);
-        Index::QueryResultVec query_results;
-        {
-            auto locked_index = index_ptr.Lock();
-            locked_index->MakeQuery(query);
-            locked_index->PollQueryResults(&query_results);
+        if(per_tag_min_seqnum_table_.find(accessor, request.query_tag)){
+            HVLOG_F(1, "Tag={} is not new", request.query_tag);
+            found_seqnum = accessor->second.seqnum;
+            found_storage_shard_id = accessor->second.storage_shard_id;
+            // TODO: broadcast alternative?
         }
-        ProcessIndexQueryResults(query_results);
-    } else {
-        HVLOG_F(1, "IndexRead: There is no local index for logspace {}", request.logspace_id);
-        SendIndexReadFailureResponse(query, protocol::SharedLogResultType::INDEX_MIN_FAILED);
     }
+    SendIndexMinReadResponse(request, found_seqnum, found_storage_shard_id);
 }
 
 void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
     HVLOG_F(1, "IndexUpdate: Index data received from storage_node={}", message.origin_node_id);
-    IndexDataProto index_data_proto;
-    if (!index_data_proto.ParseFromArray(payload.data(),
+    IndexDataPackagesProto index_data_packages;
+    if (!index_data_packages.ParseFromArray(payload.data(),
                                          static_cast<int>(payload.size()))) {
         LOG(FATAL) << "IndexUpdate: Failed to parse IndexDataProto";
     }
-
-
+    const View* view = nullptr;
     Index::QueryResultVec query_results;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
         DCHECK(message.view_id < views_.size());
-        const View* view = views_.at(message.view_id);
-        const View::Storage* storage_node = view->GetStorageNode(message.origin_node_id);
-        View::NodeIdVec storage_shards = storage_node->GetLocalStorageShardIds(message.sequencer_id);
-
-        auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
-        {
-            auto locked_index = index_ptr.Lock();
-            if(!locked_index->AdvanceIndexProgress(index_data_proto, my_node_id())){
-                return;
+        view = views_.at(message.view_id);
+        uint16_t shard_id = my_node_id() % view->num_index_shards();
+        std::vector<int> relevant_packages;
+        for (int i = 0; i < index_data_packages.index_data_proto_size(); i++) {
+            if ((index_data_packages.index_data_proto().at(i).metalog_position() - 1) % view->num_index_shards() == shard_id) {
+                relevant_packages.push_back(i);
             }
-            locked_index->PollQueryResults(&query_results);
+        }
+        if (!relevant_packages.empty()){
+            const View::Storage* storage_node = view->GetStorageNode(message.origin_node_id);
+            View::NodeIdVec storage_shards = storage_node->GetLocalStorageShardIds(message.sequencer_id);
+            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+            {
+                auto locked_index = index_ptr.Lock();
+                for (int i : relevant_packages) {
+                    locked_index->AdvanceIndexProgress(index_data_packages.index_data_proto().at(i), view->num_index_shards());
+                }
+                locked_index->PollQueryResults(&query_results);
+            }
         }
     }
     ProcessIndexQueryResults(query_results);
+    if (per_tag_seqnum_min_completion_) {
+        for (const IndexDataProto& index_data : index_data_packages.index_data_proto()){
+            FilterNewTags(view, index_data_packages.logspace_id(), index_data);
+        }
+    }
 }
 
-void IndexNode::FilterNewTags(const View* view, const IndexDataProto& index_data) {
-    // absl::flat_hash_map<uint64_t, uint64_t> per_tag_min_seqnum;
-    // uint32_t seqnum_prefix = index_data.logspace_id();
-    // int n = index_data.seqnum_halves_size();
-    // uint32_t total_tags = absl::c_accumulate(index_data.user_tag_sizes(), 0U);
-    // auto tag_iter = index_data.user_tags().begin();
-    // size_t num_stored_received_data = 0;
-    // size_t num_received_data = 0;
-    // for (int i = 0; i < n; i++) {
-    //     size_t num_tags = index_data.user_tag_sizes(i);
-    //     uint64_t seqnum = bits::JoinTwo32(seqnum_prefix, index_data.seqnum_halves(i));
-    //     auto tags = UserTagVec(tag_iter, tag_iter + num_tags);
-    //     std::vector<uint64_t> filtered_tags;
-    //     for(uint64_t tag : tags){
-    //         if (tag % view->num_index_shards() == my_node_id() % view->num_index_shards()){
-    //             if(!per_tag_min_seqnum.contains(tag)){
-    //                 per_tag_min_seqnum[tag] = seqnum;
-    //             } else {
-    //                 per_tag_min_seqnum[tag] = std::min(per_tag_min_seqnum[tag], seqnum);
-    //             }
-    //         }
-    //     }
-    //     tag_iter += num_tags;
-    // }
+void IndexNode::FilterNewTags(const View* view, uint32_t logspace_id, const IndexDataProto& index_data) {
+    int n = index_data.seqnum_halves_size();
+    auto tag_iter = index_data.user_tags().begin();
+    for (int i = 0; i < n; i++) {
+        size_t num_tags = index_data.user_tag_sizes(i);
+        auto tags = UserTagVec(tag_iter, tag_iter + num_tags);
+        std::vector<uint64_t> filtered_tags;
+        for(uint64_t tag : tags){
+            if (tag % view->num_index_shards() == my_node_id() % view->num_index_shards()){
+                uint64_t seqnum = bits::JoinTwo32(logspace_id, index_data.seqnum_halves(i));
+                uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i));
+                PerTagMinSeqnum entry = PerTagMinSeqnum({
+                    seqnum,
+                    storage_shard_id
+                });
+                PerTagMinSeqnumTable::accessor accessor;
+                if (per_tag_min_seqnum_table_.insert(accessor, tag)){
+                    accessor->second = entry;
+                } else {
+                    if(accessor->second.seqnum > seqnum){
+                        accessor->second = entry;
+                    }
+                }
+            }
+        }
+        tag_iter += num_tags;
+    }
 }
 
 void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
@@ -372,6 +384,7 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     }
 }
 
+// outdated
 void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
     if (query_result.original_query.min_seqnum_query){
         if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
@@ -468,7 +481,7 @@ void IndexNode::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
         switch (result.state) {
         case IndexQueryResult::kEmpty:
         case IndexQueryResult::kFound:
-            result.original_query.min_seqnum_query ? ProcessIndexMinResult(result) : ProcessIndexResult(result);
+            ProcessIndexResult(result);
             break;
         case IndexQueryResult::kContinue:
             ProcessIndexContinueResult(result, &more_results);
@@ -542,7 +555,7 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
     }
     if (op_type == SharedLogOpType::READ_MIN) {
         index_query.min_seqnum_query = true;
-        index_query.tail_seqnum = message.tail_seqnum;
+        index_query.tail_seqnum = message.seqnum_timestamp;
         index_query.prev_found_result = IndexFoundResult {
             .view_id = 0,
             .storage_shard_id = 0,

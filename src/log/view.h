@@ -118,22 +118,22 @@ public:
 
         uint16_t PickIndexNode(size_t shard) const {
             View::NodeIdVec index_nodes = index_shard_nodes_.at(shard);
-            size_t next_index_node = next_index_replica_node_.at(shard);
-            size_t idx = __atomic_fetch_add(&next_index_node, 1, __ATOMIC_RELAXED);
+            size_t idx = __atomic_fetch_add(&(next_index_replica_node_.at(shard)), 1, __ATOMIC_RELAXED);
             return index_nodes.at(idx % index_nodes.size());
         }
 
         uint16_t PickIndexNodeByTag(uint64_t tag) const {
             size_t shard = tag % view_->num_index_shards_;
-            return PickIndexNode(shard);
+            View::NodeIdVec index_nodes = index_shard_nodes_.at(shard);
+            return index_nodes.at(static_cast<size_t>(std::rand()) % index_nodes.size());
         }
 
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {
             size_t first_shard = PickIndexShard(); // node of shard is master
             for (size_t i = first_shard; i < view_->num_index_shards_ + first_shard ; i++) {
-                size_t j = i % view_->num_index_shards_;
-                DCHECK_LE(j, static_cast<size_t>(view_->num_index_shards_ - 1));
-                uint16_t index_node = PickIndexNode(j);
+                size_t shard = i % view_->num_index_shards_;
+                DCHECK_LE(shard, static_cast<size_t>(view_->num_index_shards_ - 1));
+                uint16_t index_node = PickIndexNode(shard);
                 sharded_index_nodes.push_back(index_node);
             } 
         }
@@ -146,7 +146,7 @@ public:
         View::NodeIdVec storage_nodes_;
         uint16_t sequencer_node_;
 
-        std::vector<size_t> next_index_replica_node_;
+        mutable std::vector<size_t> next_index_replica_node_;
         std::vector<View::NodeIdVec> index_shard_nodes_;
 
         mutable size_t next_index_shard;
@@ -229,10 +229,6 @@ public:
             return false;
         }
 
-        const View::NodeIdVec& PickIndexShardNodes() const {
-            size_t idx = __atomic_fetch_add(&next_index_shard_, 1, __ATOMIC_RELAXED);
-            return index_shard_nodes_.at(idx % view_->num_index_shards());
-        }
 
         uint16_t PickIndexShard() const {
             size_t idx = __atomic_fetch_add(&next_index_shard_, 1, __ATOMIC_RELAXED);

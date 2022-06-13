@@ -128,19 +128,18 @@ std::optional<MetaLogProto> MetaLogPrimary::MarkNextCut() {
     new_logs_proto->set_start_seqnum(bits::LowHalf64(seqnum_position()));
     uint32_t total_delta = 0;
     for (uint16_t shard_id : unblocked_shards_) {
-        meta_log_proto.add_active_storage_shard_ids(shard_id);
-        new_logs_proto->add_shard_starts(last_cut_.at(shard_id));
         uint32_t delta = 0;
         if (dirty_shards_.contains(shard_id)) {
+            meta_log_proto.add_productive_storage_shard_ids(shard_id);
+            new_logs_proto->add_shard_starts(last_cut_.at(shard_id));
             uint32_t current_position = GetShardReplicatedPosition(shard_id);
             DCHECK_GT(current_position, last_cut_.at(shard_id));
             delta = current_position - last_cut_.at(shard_id);
             last_cut_[shard_id] = current_position;
+            new_logs_proto->add_shard_deltas(delta);
         }
-        new_logs_proto->add_shard_deltas(delta);
         total_delta += delta;
     }
-    meta_log_proto.set_storage_shard_change(blocking_change_);
     blocking_change_ = false;
     dirty_shards_.clear();
     HVLOG_F(1, "Generate new NEW_LOGS meta log: start_seqnum={}, total_delta={}",
@@ -218,7 +217,7 @@ void LogProducer::PollAppendResults(AppendResultVec* results) {
 
 void LogProducer::OnNewLogs(uint32_t metalog_seqnum,
                             uint64_t start_seqnum, uint64_t start_localid,
-                            uint32_t delta) {
+                            uint32_t delta, uint16_t storage_shard_id) {
     for (size_t i = 0; i < delta; i++) {
         uint64_t seqnum = start_seqnum + i;
         uint64_t localid = start_localid + i;
@@ -258,7 +257,7 @@ LogStorage::LogStorage(uint16_t storage_id, const View* view, uint16_t sequencer
         shard_progresses_[bits::LowHalf32(global_storage_shard_id)] = 0;
         AddInterestedShard(bits::LowHalf32(global_storage_shard_id));
     }
-    index_data_.set_logspace_id(identifier());
+    index_data_packages_.set_logspace_id(identifier());
     log_header_ = fmt::format("LogStorage[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
 }
@@ -338,11 +337,14 @@ void LogStorage::PollReadResults(ReadResultVec* results) {
     pending_read_results_.clear();
 }
 
-std::optional<IndexDataProto> LogStorage::PollIndexData() {
-    IndexDataProto data;
-    data.Swap(&index_data_);
-    index_data_.Clear();
-    index_data_.set_logspace_id(identifier());
+std::optional<IndexDataPackagesProto> LogStorage::PollIndexData() {
+    if (0 == index_data_packages_.index_data_proto_size()) {
+        return std::nullopt;
+    }
+    IndexDataPackagesProto data;
+    data.Swap(&index_data_packages_);
+    index_data_packages_.Clear();
+    index_data_packages_.set_logspace_id(identifier());
     return data;
 }
 
@@ -364,7 +366,7 @@ std::optional<std::vector<uint32_t>> LogStorage::GrabShardProgressForSending() {
 // start_seqnum is increased for each engine
 void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
-                           uint32_t delta) {
+                           uint32_t delta, uint16_t storage_shard_id) {
     HVLOG_F(1, "MetalogUpdate: Create index data from metalog_seqnum={}, start_seqnum={}, start_localid={}, delta={}", metalog_seqnum, start_seqnum, start_localid, delta);
     auto iter = pending_read_requests_.begin();
     while (iter != pending_read_requests_.end() && iter->first < start_seqnum) {
@@ -414,17 +416,17 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
             iter = pending_read_requests_.erase(iter);
         }
     }
+    index_data_.add_my_productive_storage_shards(storage_shard_id);
 }
 
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
-    auto meta_header = index_data_.add_meta_headers();
-    meta_header->set_metalog_position(metalog_position());
-    meta_header->set_end_seqnum_position(local_seqnum_position());
-    meta_header->set_num_active_storage_shards(uint32_t(active_storage_shard_ids().size()));
-    for(uint16_t active_storage_shard_id : active_storage_shard_ids()){
-        if(interested_shards_.contains(active_storage_shard_id)){
-            meta_header->add_my_active_storage_shards(active_storage_shard_id);
-        }
+    if (0 < index_data_.seqnum_halves_size()) {
+        index_data_.set_metalog_position(metalog_position());
+        index_data_.set_end_seqnum_position(local_seqnum_position());
+        index_data_.set_num_productive_storage_shards(gsl::narrow_cast<uint32_t>(meta_log_proto.productive_storage_shard_ids_size()));
+        IndexDataProto* data = index_data_packages_.add_index_data_proto();
+        data->Swap(&index_data_);
+        index_data_.Clear();
     }
 }
 

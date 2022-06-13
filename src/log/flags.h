@@ -18,7 +18,6 @@ ABSL_DECLARE_FLAG(bool, slog_engine_propagate_auxdata);
 
 ABSL_DECLARE_FLAG(bool, slog_engine_index_tier_only);
 ABSL_DECLARE_FLAG(bool, slog_engine_distributed_indexing);
-ABSL_DECLARE_FLAG(bool, slog_activate_min_seqnum_completion);
 ABSL_DECLARE_FLAG(int, slog_engine_seqnum_cache_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_seqnum_suffix_cap);
 ABSL_DECLARE_FLAG(int, slog_engine_tag_cache_cap);
@@ -30,3 +29,7 @@ ABSL_DECLARE_FLAG(int, slog_storage_cache_cap_mb);
 ABSL_DECLARE_FLAG(std::string, slog_storage_backend);
 ABSL_DECLARE_FLAG(int, slog_storage_bgthread_interval_ms);
 ABSL_DECLARE_FLAG(size_t, slog_storage_max_live_entries);
+
+ABSL_DECLARE_FLAG(bool, slog_storage_index_tier_only);
+
+ABSL_DECLARE_FLAG(bool, slog_activate_min_seqnum_completion);

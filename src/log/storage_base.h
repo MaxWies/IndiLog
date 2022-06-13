@@ -46,7 +46,7 @@ protected:
     std::optional<LogEntryProto> GetLogEntryFromDB(uint64_t seqnum);
     void PutLogEntryToDB(const LogEntry& log_entry);
 
-    void SendIndexData(const View* view, const ViewMutable* view_mutable, const IndexDataProto& index_data_proto);
+    void SendIndexData(const View* view, const ViewMutable* view_mutable, const IndexDataPackagesProto& index_data_proto);
     bool SendSequencerMessage(uint16_t sequencer_id,
                               protocol::SharedLogMessage* message,
                               std::span<const char> payload);
@@ -64,6 +64,9 @@ private:
 
     std::string db_path_;
     std::unique_ptr<DBInterface> db_;
+
+    bool index_tier_only_;
+    bool per_tag_seqnum_min_completion_;
 
     base::Thread background_thread_;
 

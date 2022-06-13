@@ -83,8 +83,9 @@ View::View(const ViewProto& view_proto)
         for (size_t j = 0; j < index_replicas_; j++) {
             uint16_t index_node_id = gsl::narrow_cast<uint16_t>(
                 view_proto.index_tier_plan(static_cast<int>(i * index_replicas_ + j)));
-            index_shard_nodes_tmp[i].push_back(index_node_id);
-            index_shard_memberships[index_node_id].insert(gsl::narrow_cast<uint16_t>(i));
+            size_t shard_belonging = (i * index_replicas_ + j) % num_index_shards_;
+            index_shard_nodes_tmp[shard_belonging].push_back(index_node_id);
+            index_shard_memberships[index_node_id].insert(gsl::narrow_cast<uint16_t>(shard_belonging));
         }
     }
     std::vector<NodeIdVec> index_shard_nodes;

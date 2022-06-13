@@ -280,6 +280,10 @@ struct SharedLogMessage {
             uint16_t prev_shard_id;
         } __attribute__ ((packed));
         struct {
+            uint16_t min_seqnum_storage_shard_id; // (only used by MIN SEQNUM RESPONSE)
+            uint16_t __padding__;
+        } __attribute__ ((packed));
+        struct {
             uint16_t use_master_node_id;
             uint16_t master_node_id; // (only used for index tier)
         } __attribute__ ((packed));
@@ -298,15 +302,16 @@ struct SharedLogMessage {
     uint64_t user_metalog_progress;  // [32:40]
 
     union {
-        uint64_t localid;       // [40:48]
-        uint64_t query_seqnum;  // [40:48]
-        uint64_t trim_seqnum;   // [40:48]
+        uint64_t localid;           // [40:48]
+        uint64_t query_seqnum;      // [40:48]
+        uint64_t trim_seqnum;       // [40:48]
+        uint64_t complete_seqnum;   // [40:48] (only used by MIN SEQNUM RESPONSE)
     };
     uint64_t client_data;       // [48:56]
 
     union {
         uint64_t prev_found_seqnum; // [56:64]
-        uint64_t tail_seqnum;       // [56:64] (only used by Index Tier MIN requests)
+        uint64_t seqnum_timestamp;  // [56:64] (only used by Index Tier MIN requests)
     };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));

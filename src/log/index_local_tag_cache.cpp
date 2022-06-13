@@ -177,9 +177,9 @@ void PerSpaceTagCache::AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequ
     }
 }
 
-void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity){
-    if (min_seqnum == kInvalidLogSeqNum){
-        // the global min seqnum was invalid, thus the tag is new and complete
+void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint64_t timestamp, uint16_t sequencer_id, uint64_t popularity){
+    if (min_seqnum == kInvalidLogSeqNum || timestamp <= min_seqnum){
+        // the global min seqnum was invalid or is after the timestamp, thus the tag is new and complete
         HVLOG_F(1, "Tag={} is completely new", tag);
         if(tags_.contains(tag)){
             // head is min
@@ -195,7 +195,7 @@ void PerSpaceTagCache::HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16
             // tag not yet exists, thus min seqnum for tag is pending
             if (!pending_min_tags_.contains(tag)){
                 HVLOG_F(1, "min_seqnum for tag={} not existed before and not yet received. Tag is pending...", tag);
-                TagEntry* tag_entry = new TagEntry(min_seqnum, min_storage_shard_id, popularity, /*complete*/ true);
+                TagEntry* tag_entry = new TagEntry(kInvalidLogSeqNum, min_storage_shard_id, popularity, /*complete*/ true);
                 pending_min_tags_[tag].reset(tag_entry);
             }
         }
@@ -450,41 +450,40 @@ TagCacheView::~TagCacheView() {}
 
 bool TagCacheView::CheckIfNewIndexData(const IndexDataProto& index_data){
     bool index_data_new = false;
-    for(int i = 0; i < index_data.meta_headers_size(); i++){
-        auto meta_header = index_data.meta_headers().at(i);
-        if (meta_header.metalog_position() <= metalog_position_){
-            HVLOG_F(1, "Received metalog_position={} lower|equal my metalog_position={}", meta_header.metalog_position(), metalog_position_);
-            continue;
-        }
-        auto storage_shards = meta_header.my_active_storage_shards();
-        size_t active_shards = meta_header.num_active_storage_shards();
-        uint32_t metalog_position = meta_header.metalog_position();
-        if(storage_shards_index_updates_.contains(metalog_position)){
-            HVLOG_F(1, "Received pending metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
-                metalog_position, storage_shards.size(), active_shards
-            );
-            size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
-            size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            DCHECK_GE(after_update, before_update);
-            end_seqnum_positions_[metalog_position] = 
-                std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
-            index_data_new = after_update > before_update; //check if some of the shards contributed
-        } else {
-            HVLOG_F(1, "Received new metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
-                metalog_position, storage_shards.size(), active_shards
-            );
-            storage_shards_index_updates_.insert({
-                metalog_position,
-                {
-                    active_shards, // store the active shards for this metalog
-                    absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
-                }
-            });
-            DCHECK(0 < storage_shards_index_updates_.size());
-            end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
-            index_data_new = true;
-        }
+    if (index_data.metalog_position() <= metalog_position_){
+        HVLOG_F(1, "Received metalog_position={} lower|equal my metalog_position={}", index_data.metalog_position(), metalog_position_);
+        return false;
+    }
+    uint32_t metalog_position = index_data.metalog_position();
+    if(storage_shards_index_updates_.contains(metalog_position)){
+        HVLOG_F(1, "Received pending metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+            metalog_position, index_data.my_productive_storage_shards_size(), index_data.num_productive_storage_shards()
+        );
+        size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
+        storage_shards_index_updates_.at(metalog_position).second.insert(
+            index_data.my_productive_storage_shards().begin(), 
+            index_data.my_productive_storage_shards().end()
+        );
+        size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
+        DCHECK_GE(after_update, before_update);
+        index_data_new = after_update > before_update; //check if some of the shards contributed
+    } else {
+        HVLOG_F(1, "Received new metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+            metalog_position, index_data.my_productive_storage_shards_size(), index_data.num_productive_storage_shards()
+        );
+        storage_shards_index_updates_.insert({
+            metalog_position,
+            {
+                index_data.num_productive_storage_shards(), // store the productive shards for this metalog
+                absl::flat_hash_set<uint16_t>(
+                    index_data.my_productive_storage_shards().begin(), 
+                    index_data.my_productive_storage_shards().end()
+                )
+            }
+        });
+        DCHECK(0 < storage_shards_index_updates_.size());
+        end_seqnum_positions_[metalog_position] = index_data.end_seqnum_position();
+        index_data_new = true;
     }
     return index_data_new;
 }
@@ -527,7 +526,6 @@ TagCache::~TagCache() {}
 
 void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data, std::vector<PendingMinTag>& pending_min_tags){
     HVLOG(1) << "Provide index data";
-    DCHECK_EQ(current_logspace_id(), index_data.logspace_id());
     if (!pending_min_tags.empty()){
         uint64_t popularity = bits::JoinTwo32(latest_view_id_, latest_metalog_position());
         for (auto pending_min_tag : pending_min_tags) {
@@ -535,6 +533,7 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
                 pending_min_tag.tag,
                 pending_min_tag.seqnum,
                 pending_min_tag.storage_shard_id,
+                pending_min_tag.timestamp,
                 sequencer_id_,
                 popularity
             );
@@ -565,18 +564,17 @@ void TagCache::ProvideIndexData(uint16_t view_id, const IndexDataProto& index_da
         };
         tag_iter += num_tags;
     }
-    AdvanceIndexProgress(view_id);
 }
 
-void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto){
-    GetOrCreatePerSpaceTagCache(user_logspace)->HandleMinSeqnum(
-        tag,
-        index_result_proto.seqnum(),
-        gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()),
-        sequencer_id_,
-        bits::JoinTwo32(latest_view_id_, latest_metalog_position())
-    );
-}
+// void TagCache::ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto){
+//     GetOrCreatePerSpaceTagCache(user_logspace)->HandleMinSeqnum(
+//         tag,
+//         index_result_proto.seqnum(),
+//         gsl::narrow_cast<uint16_t>(index_result_proto.storage_shard_id()),
+//         sequencer_id_,
+//         bits::JoinTwo32(latest_view_id_, latest_metalog_position())
+//     );
+// }
 
 void TagCache::Evict(){
     while(cache_size_ > max_cache_size_){

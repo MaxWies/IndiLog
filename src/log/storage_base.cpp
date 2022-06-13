@@ -25,6 +25,8 @@ StorageBase::StorageBase(uint16_t node_id)
     : ServerBase(node_id, fmt::format("storage_{}", node_id), NodeType::kStorageNode),
       node_id_(node_id),
       db_(nullptr),
+      index_tier_only_(absl::GetFlag(FLAGS_slog_storage_index_tier_only)),
+      per_tag_seqnum_min_completion_(absl::GetFlag(FLAGS_slog_activate_min_seqnum_completion)),
       background_thread_("BG", [this] { this->BackgroundThreadMain(); }) {}
 
 StorageBase::~StorageBase() {}
@@ -151,33 +153,37 @@ std::optional<std::string> StorageBase::LogCacheGetAuxData(uint64_t seqnum) {
 }
 
 void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutable,
-                                const IndexDataProto& index_data_proto) {
-    if (index_data_proto.meta_headers_size() < 1 && 0 < index_data_proto.seqnum_halves_size()){
-        HLOG(FATAL) << "Sending metalog without any position but new seqnums";
-    }
-    if (index_data_proto.meta_headers_size() < 1){
-        HVLOG(1) << "No metaheaders";
-        return;
-    }
-    uint32_t logspace_id = index_data_proto.logspace_id();
+                                const IndexDataPackagesProto& index_data_packages) {
+    uint32_t logspace_id = index_data_packages.logspace_id();
     DCHECK_EQ(view->id(), bits::HighHalf32(logspace_id));
     std::string serialized_data;
-    CHECK(index_data_proto.SerializeToString(&serialized_data));
+    CHECK(index_data_packages.SerializeToString(&serialized_data));
     SharedLogMessage message = SharedLogMessageHelper::NewIndexDataMessage(
         logspace_id);
     message.origin_node_id = node_id_;
     message.payload_size = gsl::narrow_cast<uint32_t>(serialized_data.size());
-    for (auto& [shard_id, engine_id] : view_mutable->GetStorageShardOccupation()) {
-        if(bits::HighHalf32(shard_id) == bits::LowHalf32(logspace_id)){
-            SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
-                             engine_id, message, STRING_AS_SPAN(serialized_data));
+    if (!index_tier_only_){
+        HVLOG(1) << "MetalogUpdate: Send index data to storage nodes";
+        for (auto& [shard_id, engine_id] : view_mutable->GetStorageShardOccupation()) {
+            if(bits::HighHalf32(shard_id) == bits::LowHalf32(logspace_id)){
+                SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
+                                engine_id, message, STRING_AS_SPAN(serialized_data));
+            }
         }
     }
-
     for(uint16_t index_id : view->GetIndexNodes()){
-        HVLOG_F(1, "MetalogUpdate: Send index data to index node {}", index_id);
-        SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
-            index_id, message, STRING_AS_SPAN(serialized_data));
+        bool send = per_tag_seqnum_min_completion_;
+        if (!send) {
+            uint16_t shard_id = index_id % view->num_index_shards();
+            for(int i = 0; i < index_data_packages.index_data_proto_size(); i++){
+                send |= ((index_data_packages.index_data_proto().at(i).metalog_position() - 1) % view->num_index_shards() == shard_id);
+            }
+        }
+        if (send){
+            HVLOG_F(1, "MetalogUpdate: Send index data to index node {}", index_id);
+            SendSharedLogMessage(protocol::ConnType::STORAGE_TO_INDEX,
+                index_id, message, STRING_AS_SPAN(serialized_data));
+        }
     }
 }
 

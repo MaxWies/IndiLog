@@ -88,6 +88,17 @@ Index::Index(const View* view, uint16_t sequencer_id)
     state_ = kNormal;
 }
 
+Index::Index(const View* view, uint16_t sequencer_id, uint32_t index_shard_id, size_t num_shards)
+    : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
+      indexed_metalog_position_(index_shard_id),
+      first_index_data_(true),
+      data_received_seqnum_position_(0),
+      indexed_seqnum_position_(0),
+      num_shards_(num_shards) {
+    log_header_ = fmt::format("LogIndex[{}-{}]: ", view->id(), sequencer_id);
+    state_ = kNormal;
+}
+
 Index::~Index() {}
 
 class Index::PerSpaceIndex {
@@ -240,7 +251,6 @@ bool Index::PerSpaceIndex::FindNext(const std::vector<uint32_t>& seqnums,
 }
 
 void Index::ProvideIndexData(const IndexDataProto& index_data) {
-    DCHECK_EQ(identifier(), index_data.logspace_id());
     if(first_index_data_ && 0 < index_data.seqnum_halves_size()){
         HVLOG_F(1, "Initialize data_received_seqnum_position with {}", index_data.seqnum_halves().at(0));
         data_received_seqnum_position_ = index_data.seqnum_halves().at(0);
@@ -284,23 +294,15 @@ void Index::ProvideIndexData(const IndexDataProto& index_data) {
     }
 }
 
-void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index_node_id) {
-    DCHECK_EQ(identifier(), index_data.logspace_id());
+void Index::ProvideIndexDataShard(const IndexDataProto& index_data) {
     if(first_index_data_){
         first_index_data_ = false;
     }
-    uint16_t selected_index_shard = gsl::narrow_cast<uint16_t>(index_data.index_shard());
-    bool is_my_turn = view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(selected_index_shard);
-    absl::flat_hash_set<uint64_t> min_tags_;
     int n = index_data.seqnum_halves_size();
     DCHECK_EQ(n, index_data.engine_ids_size());
     DCHECK_EQ(n, index_data.user_logspaces_size());
     DCHECK_EQ(n, index_data.user_tag_sizes_size());
-    uint32_t total_tags = absl::c_accumulate(index_data.user_tag_sizes(), 0U);
-    DCHECK_EQ(static_cast<int>(total_tags), index_data.user_tags_size());
     auto tag_iter = index_data.user_tags().begin();
-    size_t num_stored_received_data = 0;
-    size_t num_received_data = 0;
     for (int i = 0; i < n; i++) {
         size_t num_tags = index_data.user_tag_sizes(i);
         uint32_t seqnum = index_data.seqnum_halves(i);
@@ -310,41 +312,14 @@ void Index::ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index
             continue;
         }
         if (received_data_.count(seqnum) == 0) {
-            auto tags = UserTagVec(tag_iter, tag_iter + num_tags);
-            std::vector<uint64_t> filtered_tags;
-            for(uint64_t tag : tags){
-                if (min_tags_.contains(tag)){
-                    if(is_my_turn){
-                        filtered_tags.push_back(tag);
-                    }
-                } else {
-                    min_tags_.insert(tag);
-                    uint16_t index_shard = gsl::narrow_cast<uint16_t>(tag % view_->num_index_shards());
-                    if(view_->GetIndexNode(my_index_node_id)->IsIndexShardMember(index_shard)){
-                        filtered_tags.push_back(tag);
-                    }
-                }
-            }
-            if (0 < filtered_tags.size() || (tags.empty() && is_my_turn)) {
-                received_data_[seqnum] = IndexData {
-                    .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
-                    .user_logspace = index_data.user_logspaces(i),
-                    .user_tags     = UserTagVec(filtered_tags.begin(), filtered_tags.end()),
-                    .skip = false
-                };
-                num_received_data++;
-                num_stored_received_data++;
-            } else {
-                TryCreateIndex(index_data.user_logspaces(i));
-                received_data_[seqnum] = IndexData {
-                    .skip = true
-                };
-                num_received_data++;
-            }
+           received_data_[seqnum] = IndexData {
+                .engine_id     = gsl::narrow_cast<uint16_t>(index_data.engine_ids(i)),
+                .user_logspace = index_data.user_logspaces(i),
+                .user_tags     = UserTagVec(tag_iter, tag_iter + num_tags)
+            };
         }
         tag_iter += num_tags;
     }
-    HVLOG_F(1, "From {} received seqnums there will be {} stored", num_received_data, num_stored_received_data);
 }
 
 void Index::MakeQuery(const IndexQuery& query) {
@@ -403,10 +378,6 @@ void Index::OnMetaLogApplied(const MetaLogProto& meta_log_proto) {
         cuts_.push_back(std::make_pair(meta_log_proto.metalog_seqnum(), seqnum));
     }
     AdvanceIndexProgress();
-}
-
-void Index::AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum) {
-    cuts_.push_back(std::make_pair(metalog_seqnum, next_seqnum));
 }
 
 void Index::OnFinalized(uint32_t metalog_position) {
@@ -471,17 +442,13 @@ void Index::AdvanceIndexProgress() {
     }
 }
 
-bool Index::AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_index_node_id) {
+bool Index::AdvanceIndexProgress(const IndexDataProto& index_data, size_t num_index_shards) {
     if(CheckIfNewIndexData(index_data)){
-        HVLOG(1) << "IndexUpdate: New metalog progress";
-        if(0 < index_data.seqnum_halves_size()){
-            HVLOG(1) << "IndexUpdate: Contains index data";
-            ProvideIndexData(index_data, my_index_node_id);
-        }
+        ProvideIndexDataShard(index_data);
     }
     bool advanced = false;
     uint32_t end_seqnum_position;
-    while(TryCompleteIndexUpdates(&end_seqnum_position)){
+    while(TryCompleteIndexUpdates(&end_seqnum_position, num_index_shards)){
         {
             auto iter = received_data_.begin();
             while (iter != received_data_.end()) {
@@ -529,41 +496,47 @@ bool Index::AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_i
 
 
 bool Index::CheckIfNewIndexData(const IndexDataProto& index_data){
+    // careful with metalog position of meta header
     bool index_data_new = false;
-    for(int i = 0; i < index_data.meta_headers_size(); i++){
-        auto meta_header = index_data.meta_headers().at(i);
-        if (meta_header.metalog_position() <= metalog_position_){
-            continue;
-        }
-        auto storage_shards = meta_header.my_active_storage_shards();
-        size_t active_shards = meta_header.num_active_storage_shards();
-        uint32_t metalog_position = meta_header.metalog_position();
-        if(storage_shards_index_updates_.contains(metalog_position)){
-            size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            storage_shards_index_updates_.at(metalog_position).second.insert(storage_shards.begin(), storage_shards.end());
-            size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
-            DCHECK_GE(after_update, before_update);
-            end_seqnum_positions_[metalog_position] = 
-                std::min(end_seqnum_positions_.at(metalog_position), meta_header.end_seqnum_position());
-            index_data_new = after_update > before_update; //check if some of the shards contributed
-        } else {
-            HVLOG_F(1, "Received new metalog_position={} for which {} shards are active", metalog_position, active_shards);
-            storage_shards_index_updates_.insert({
-                metalog_position,
-                {
-                    active_shards, // store the active shards for this metalog
-                    absl::flat_hash_set<uint16_t>(storage_shards.begin(), storage_shards.end())
-                }
-            });
-            DCHECK(0 < storage_shards_index_updates_.size());
-            end_seqnum_positions_[metalog_position] = meta_header.end_seqnum_position();
-            index_data_new = true;
-        }
+    if (index_data.metalog_position() <= metalog_position_){
+        HVLOG_F(1, "Received metalog_position={} lower|equal my metalog_position={}", index_data.metalog_position(), metalog_position_);
+        return false;
+    }
+    uint32_t metalog_position = index_data.metalog_position();
+    if(storage_shards_index_updates_.contains(metalog_position)){
+        HVLOG_F(1, "Received pending metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+            metalog_position, index_data.my_productive_storage_shards_size(), index_data.num_productive_storage_shards()
+        );
+        size_t before_update = storage_shards_index_updates_.at(metalog_position).second.size();
+        storage_shards_index_updates_.at(metalog_position).second.insert(
+            index_data.my_productive_storage_shards().begin(), 
+            index_data.my_productive_storage_shards().end()
+        );
+        size_t after_update = storage_shards_index_updates_.at(metalog_position).second.size();
+        DCHECK_GE(after_update, before_update);
+        index_data_new = after_update > before_update; //check if some of the shards contributed
+    } else {
+        HVLOG_F(1, "Received new metalog_position={}. storage_shards_of_node={}, active_storage_shards={}", 
+            metalog_position, index_data.my_productive_storage_shards_size(), index_data.num_productive_storage_shards()
+        );
+        storage_shards_index_updates_.insert({
+            metalog_position,
+            {
+                index_data.num_productive_storage_shards(), // store the productive shards for this metalog
+                absl::flat_hash_set<uint16_t>(
+                    index_data.my_productive_storage_shards().begin(), 
+                    index_data.my_productive_storage_shards().end()
+                )
+            }
+        });
+        DCHECK(0 < storage_shards_index_updates_.size());
+        end_seqnum_positions_[metalog_position] = index_data.end_seqnum_position();
+        index_data_new = true;
     }
     return index_data_new;
 }
 
-bool Index::TryCompleteIndexUpdates(uint32_t* end_seqnum_position){
+bool Index::TryCompleteIndexUpdates(uint32_t* end_seqnum_position, size_t num_index_shards){
     // check if next higher metalog_position is complete
     uint32_t next_index_metalog_position = indexed_metalog_position_ + 1;
     if (!storage_shards_index_updates_.contains(next_index_metalog_position)){
@@ -576,8 +549,8 @@ bool Index::TryCompleteIndexUpdates(uint32_t* end_seqnum_position){
         return false;
     }
     if (entry.first == entry.second.size()){
-        // updates from all active storage shards received
-        indexed_metalog_position_ = next_index_metalog_position;
+        // updates from all active storage shards received -> jump to next metalog base on shard amount
+        indexed_metalog_position_ = indexed_metalog_position_ + uint32_t(num_index_shards);
         *end_seqnum_position = end_seqnum_positions_.at(next_index_metalog_position);
         storage_shards_index_updates_.erase(next_index_metalog_position);
         end_seqnum_positions_.erase(next_index_metalog_position);
@@ -740,7 +713,7 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
         HVLOG_F(1, "Min query for tag {}: seqnum result higher {} than tail {} of requester", query.user_tag, bits::HexStr0x(seqnum), bits::HexStr0x(query.tail_seqnum));
         return IndexQueryResult {
             .state = IndexQueryResult::kFound,
-            .metalog_progress = query.initial ? index_metalog_progress()
+            .metalog_progress = query.initial ? sharded_index_metalog_progress()
                                             : query.metalog_progress,
             .next_view_id = 0,
             .original_query = query,
@@ -753,7 +726,7 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
     }
     return IndexQueryResult {
         .state = IndexQueryResult::kFound,
-        .metalog_progress = query.initial ? index_metalog_progress()
+        .metalog_progress = query.initial ? sharded_index_metalog_progress()
                                           : query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,
@@ -768,7 +741,7 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
 IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
     return IndexQueryResult {
         .state = IndexQueryResult::kEmpty,
-        .metalog_progress = query.initial ? index_metalog_progress()
+        .metalog_progress = query.initial ? sharded_index_metalog_progress()
                                           : query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,
@@ -785,7 +758,7 @@ IndexQueryResult Index::BuildContinueResult(const IndexQuery& query, bool found,
     DCHECK(view_->id() > 0);
     IndexQueryResult result = {
         .state = IndexQueryResult::kContinue,
-        .metalog_progress = query.initial ? index_metalog_progress()
+        .metalog_progress = query.initial ? sharded_index_metalog_progress()
                                           : query.metalog_progress,
         .next_view_id = gsl::narrow_cast<uint16_t>(view_->id() - 1),
         .original_query = query,

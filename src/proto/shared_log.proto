@@ -64,29 +64,28 @@ message MetaLogProto {
     uint32 logspace_id    = 1;
     uint32 metalog_seqnum = 2;
 
-    bool storage_shard_change = 3;
-    repeated uint32 active_storage_shard_ids = 4; //sorted ascending
-
     enum Type {
         INVALID  = 0;
         NEW_LOGS = 1;
         TRIM     = 2;
     }
-    Type type = 5;
+    Type type = 3;
 
     message NewLogsProto {
         uint32          start_seqnum = 1;
         repeated uint32 shard_starts = 2;
         repeated uint32 shard_deltas = 3;
     }
-    NewLogsProto new_logs_proto = 6;
+    NewLogsProto new_logs_proto = 4;
 
     message TrimProto {
         uint32 user_logspace = 1;
         uint64 user_tag      = 2;
         uint64 trim_seqnum   = 3;
     }
-    TrimProto trim_proto = 7;
+    TrimProto trim_proto = 5;
+
+    repeated uint32 productive_storage_shard_ids = 6;
 }
 
 message MetaLogsProto {
@@ -122,24 +121,23 @@ message LogEntryProto {
 }
 
 message IndexDataProto {
+    uint32 metalog_position = 1;
+    uint32 end_seqnum_position = 2;
+
+    uint32 num_productive_storage_shards = 3;
+    repeated uint32 my_productive_storage_shards = 4;
+
+    repeated uint32 user_logspaces = 5;
+
+    repeated uint32 seqnum_halves  = 6;
+    repeated uint32 engine_ids     = 7;
+    repeated uint32 user_tag_sizes = 8;
+    repeated uint64 user_tags      = 9;
+}
+
+message IndexDataPackagesProto {
     uint32 logspace_id  = 1;
-    uint32 index_shard = 2;
-
-    message MetaHeader {
-        uint32 metalog_position = 1;
-        uint32 end_seqnum_position = 2;
-        uint32 num_active_storage_shards = 3;
-        repeated uint32 my_active_storage_shards = 4;
-    }
-
-    repeated MetaHeader meta_headers = 3;
-
-    repeated uint32 user_logspaces = 4;
-
-    repeated uint32 seqnum_halves  = 5;
-    repeated uint32 engine_ids     = 6;
-    repeated uint32 user_tag_sizes = 7;
-    repeated uint64 user_tags      = 8;
+    repeated IndexDataProto index_data_proto = 2;
 }
 
 message IndexResultProto {

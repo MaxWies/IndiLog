@@ -50,6 +50,7 @@ protected:
 
     void SendMasterIndexResult(const IndexQueryResult& result);
     void SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id);
+    void SendIndexMinReadResponse(const protocol::SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id);
     void BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id);
     void SendIndexReadFailureResponse(const IndexQuery& query,  protocol::SharedLogResultType result);
     bool SendStorageReadRequest(const IndexQueryResult& result, const View::StorageShard* storage_shard_node);

@@ -85,7 +85,7 @@ private:
 
     void OnNewLogs(uint32_t metalog_seqnum,
                    uint64_t start_seqnum, uint64_t start_localid,
-                   uint32_t delta) override;
+                   uint32_t delta, uint16_t storage_shard_id) override;
     void OnFinalized(uint32_t metalog_position) override;
 
     DISALLOW_COPY_AND_ASSIGN(LogProducer);
@@ -117,7 +117,7 @@ public:
     using ReadResultVec = absl::InlinedVector<ReadResult, 4>;
     void PollReadResults(ReadResultVec* results);
 
-    std::optional<IndexDataProto> PollIndexData();
+    std::optional<IndexDataPackagesProto> PollIndexData();
     std::optional<std::vector<uint32_t>> GrabShardProgressForSending();
 
 private:
@@ -142,10 +142,11 @@ private:
     ReadResultVec pending_read_results_;
 
     IndexDataProto index_data_;
+    IndexDataPackagesProto index_data_packages_;
 
     void OnNewLogs(uint32_t metalog_seqnum,
                    uint64_t start_seqnum, uint64_t start_localid,
-                   uint32_t delta) override;
+                   uint32_t delta, uint16_t storage_shard_id) override;
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;
 

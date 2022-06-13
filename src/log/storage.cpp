@@ -60,7 +60,7 @@ void Storage::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
     LogStorage::ReadResultVec results;
-    std::vector<IndexDataProto> index_data_vec;
+    std::vector<IndexDataPackagesProto> index_data_vec;
     const ViewMutable* view_mutable;
     {
         absl::MutexLock view_lk(&view_mu_);
@@ -93,7 +93,7 @@ void Storage::OnViewFinalized(const FinalizedView* finalized_view) {
         SomeIOWorker()->ScheduleFunction(
             nullptr, [this, view = finalized_view->view(), view_mutable = view_mutable,
                       index_data_vec = std::move(index_data_vec)] {
-                for (const IndexDataProto& index_data : index_data_vec) {
+                for (const IndexDataPackagesProto& index_data : index_data_vec) {
                     SendIndexData(view, view_mutable, index_data);
                 }
             }
@@ -188,7 +188,7 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
     const View* view = nullptr;
     const ViewMutable* view_mutable = nullptr;
     LogStorage::ReadResultVec results;
-    std::optional<IndexDataProto> index_data;
+    std::optional<IndexDataPackagesProto> index_data;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
@@ -205,18 +205,11 @@ void Storage::OnRecvNewMetaLogs(const SharedLogMessage& message,
             }
             locked_storage->PollReadResults(&results);
             index_data = locked_storage->PollIndexData();
-            view->GetStorageNode(my_node_id());
-            if (index_data.has_value()) {
-                index_data->set_index_shard(view->GetStorageNode(my_node_id())->PickIndexShard());
-            }
         }
     }
     ProcessReadResults(results);
     if (index_data.has_value()) {
         SendIndexData(DCHECK_NOTNULL(view), DCHECK_NOTNULL(view_mutable), *index_data);
-    } else {
-        // send always index data (even if only metalog)
-        UNREACHABLE();
     }
 }
 

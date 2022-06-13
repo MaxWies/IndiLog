@@ -45,8 +45,6 @@ protected:
     void AddInterestedShard(uint16_t shard_id);
     absl::flat_hash_set<size_t> interested_shards_;   
 
-    std::vector<uint16_t> active_storage_shard_ids() { return active_storage_shard_ids_; }
-
     void set_metalog_position(uint32_t metalog_position){
         metalog_position_ = metalog_position;
     }
@@ -54,7 +52,7 @@ protected:
     using OffsetVec = absl::FixedArray<uint32_t>;
     virtual void OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
-                           uint32_t delta) {}
+                           uint32_t delta, uint16_t storage_shard_id) {}
     virtual void OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_cuts) {}
     virtual void OnTrim(uint32_t metalog_seqnum,
                         uint32_t user_logspace, uint64_t user_tag,
@@ -70,16 +68,12 @@ protected:
     std::string log_header_;
 
 private:
-    std::vector<uint16_t> active_storage_shard_ids_;
-
     absl::flat_hash_map<uint16_t, uint32_t> shard_progresses_;
     uint32_t seqnum_position_;
 
     utils::ProtobufMessagePool<MetaLogProto> metalog_pool_;
     std::vector<MetaLogProto*> applied_metalogs_;
     std::map</* metalog_seqnum */ uint32_t, MetaLogProto*> pending_metalogs_;
-
-    bool first_metalog_;
 
     void AdvanceMetaLogProgress();
     bool CanApplyMetaLog(const MetaLogProto& meta_log);

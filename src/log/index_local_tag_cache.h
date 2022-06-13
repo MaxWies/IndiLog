@@ -11,6 +11,7 @@ public:
     uint64_t seqnum;
     uint16_t storage_shard_id;
     uint32_t user_logspace;
+    uint64_t timestamp;
 };
 
 class TagSuffixLink {
@@ -57,7 +58,7 @@ public:
     ~PerSpaceTagCache();
 
     void AddOrUpdate(uint64_t tag, uint16_t view_id, uint16_t sequencer_id, uint32_t seqnum, uint16_t storage_shard_id, uint64_t popularity);
-    void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint16_t sequencer_id, uint64_t popularity);
+    void HandleMinSeqnum(uint64_t tag, uint64_t min_seqnum, uint16_t min_storage_shard_id, uint64_t timestamp, uint16_t sequencer_id, uint64_t popularity);
     void Remove(uint64_t tag, uint64_t popularity);
     void Remove(uint64_t popularity);
     void Evict(uint64_t popularity, uint32_t per_tag_seqnums_limit, size_t* evicted_seqnums);
@@ -110,7 +111,7 @@ public:
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
 
     void ProvideIndexData(uint16_t view_id, const IndexDataProto& index_data_proto, std::vector<PendingMinTag>& pending_min_tags);
-    void ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto);
+    // void ProvideMinSeqnumData(uint32_t user_logspace, uint64_t tag, const IndexResultProto& index_result_proto);
     bool AdvanceIndexProgress(uint16_t view_id);
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);

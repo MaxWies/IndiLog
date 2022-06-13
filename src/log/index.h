@@ -57,22 +57,21 @@ public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
 
     Index(const View* view, uint16_t sequencer_id);
+    Index(const View* view, uint16_t sequencer_id, uint32_t index_shard_id, size_t num_shards);
     ~Index();
 
     void ProvideIndexData(const IndexDataProto& index_data);
-    void ProvideIndexData(const IndexDataProto& index_data, uint16_t my_index_node_id);
+    void ProvideIndexDataShard(const IndexDataProto& index_data);
 
     void MakeQuery(const IndexQuery& query);
 
     using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
     void PollQueryResults(QueryResultVec* results);
 
-    void AddCut(uint32_t metalog_seqnum, uint32_t next_seqnum);
-
     void AdvanceIndexProgress();
-    bool AdvanceIndexProgress(const IndexDataProto& index_data, uint16_t my_index_node_id);
+    bool AdvanceIndexProgress(const IndexDataProto& index_data, size_t num_index_shards);
 
-    bool TryCompleteIndexUpdates(uint32_t* seqnum_position);
+    bool TryCompleteIndexUpdates(uint32_t* seqnum_position, size_t num_index_shards);
     bool CheckIfNewIndexData(const IndexDataProto& index_data);
 
     void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
@@ -114,8 +113,20 @@ private:
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
 
+    size_t num_shards_;
+
     uint64_t index_metalog_progress() const {
         return bits::JoinTwo32(identifier(), indexed_metalog_position_);
+    }
+
+    uint64_t sharded_index_metalog_progress() const {
+        uint32_t real_index_metalog_progress = indexed_metalog_position_;
+        if (real_index_metalog_progress <= num_shards_) {
+            real_index_metalog_progress = 0;
+        } else {
+            real_index_metalog_progress -= num_shards_;
+        }
+        return bits::JoinTwo32(identifier(), real_index_metalog_progress);
     }
 
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;

@@ -177,6 +177,29 @@ void IndexBase::SendIndexReadResponse(const IndexQueryResult& result, uint32_t l
     }
 }
 
+void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id){
+    SharedLogMessage response = SharedLogMessageHelper::NewResponse(protocol::SharedLogResultType::INDEX_MIN_OK);
+    response.origin_node_id = my_node_id();
+
+    response.hop_times = original_request.hop_times + 1;
+    response.client_data = original_request.client_data;
+    response.user_logspace = original_request.user_logspace;
+    response.query_tag = original_request.query_tag;
+    response.seqnum_timestamp = original_request.seqnum_timestamp; // timestamp
+
+    response.storage_shard_id = storage_shard_id;
+    response.complete_seqnum = seqnum;
+    response.min_seqnum_storage_shard_id = storage_shard_id;
+
+    uint16_t engine_destination = original_request.origin_node_id;
+    bool success = SendSharedLogMessage(
+        protocol::ConnType::INDEX_TO_ENGINE,
+        engine_destination, response);
+    if (!success) {
+        HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_destination);
+    }
+}
+
 void IndexBase::BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id) {
     protocol::SharedLogResultType result_type;
     if (result.original_query.min_seqnum_query){
