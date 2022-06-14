@@ -202,8 +202,6 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
             locked_logspace->UpdateReplicaProgress(
                 message.origin_node_id, message.metalog_position);
             uint32_t new_position = locked_logspace->replicated_metalog_position();
-            HVLOG_F(1, "Get metalog progress from sequencer={}. old_position={}, new_position={}",
-                message.origin_node_id, old_position, new_position);
             for (uint32_t pos = old_position; pos < new_position; pos++) {
                 if (auto metalog = locked_logspace->GetMetaLog(pos); metalog.has_value()) {
                     replicated_metalogs.push_back(std::move(*metalog));
@@ -214,7 +212,6 @@ void Sequencer::OnRecvMetaLogProgress(const SharedLogMessage& message) {
         }
     }
     for (const MetaLogProto& metalog_proto : replicated_metalogs) {
-        HVLOG(1) << "Propagate meta log";
         PropagateMetaLog(DCHECK_NOTNULL(view), DCHECK_NOTNULL(view_mutable), metalog_proto);
     }
 }
@@ -262,12 +259,9 @@ void Sequencer::OnRecvNewMetaLogs(const SharedLogMessage& message,
         }
     }
     if (new_metalog_position > old_metalog_position) {
-        HVLOG(1) << "Metalog position increases";
         SharedLogMessage response = SharedLogMessageHelper::NewMetaLogProgressMessage(
             logspace_id, new_metalog_position);
         SendSequencerMessage(message.sequencer_id, &response);
-    } else {
-        HVLOG(1) << "Metalog position did not increase";
     }
 }
 

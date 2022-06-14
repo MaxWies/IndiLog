@@ -132,7 +132,6 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
         default:
             UNREACHABLE();
         }
-        HVLOG(1) << "MetalogUpdate: Increase metalog_position by 1";
         metalog_position_ = meta_log->metalog_seqnum() + 1;
         OnMetaLogApplied(*meta_log);
         iter = pending_metalogs_.erase(iter);

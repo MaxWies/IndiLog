@@ -97,25 +97,6 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     }
 }
 
-// namespace {
-// static inline std::string SerializedIndexResult(const IndexQueryResult& result) {
-//     IndexResultProto index_result_proto;
-//     index_result_proto.set_original_requester_id(result.original_query.origin_node_id);
-//     if (result.state == IndexQueryResult::kEmpty){
-//         DCHECK(result.found_result.seqnum == kInvalidLogSeqNum);
-//         index_result_proto.set_found(false);
-//     } else {
-//         index_result_proto.set_found(true);
-//     }
-//     index_result_proto.set_view_id(result.found_result.view_id);
-//     index_result_proto.set_storage_shard_id(result.found_result.storage_shard_id);
-//     index_result_proto.set_seqnum(result.found_result.seqnum);
-//     std::string data;
-//     CHECK(index_result_proto.SerializeToString(&data));
-//     return data;
-// }
-// }  // namespace
-
 void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
     response.origin_node_id = my_node_id();
@@ -123,9 +104,7 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     response.client_data = result.original_query.client_data;
     response.user_logspace = result.original_query.user_logspace;
 
-    // response.query_tag = result.original_query.user_tag;
     response.query_seqnum = result.original_query.query_seqnum;
-
     response.user_metalog_progress = result.metalog_progress;
 
     response.found_view_id = result.found_result.view_id;
@@ -133,13 +112,8 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     response.found_seqnum = result.found_result.seqnum;
     response.engine_node_id = result.original_query.origin_node_id;
 
-    // response.prev_view_id = result.original_query.prev_found_result.view_id;
-    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-
     response.payload_size = 0;
     uint16_t master_node_id = result.original_query.master_node_id;
-    //master node id cannot be part of sharedlogmessage
     bool success = SendSharedLogMessage(
         protocol::ConnType::INDEX_TO_MERGER,
         master_node_id, response);

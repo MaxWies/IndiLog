@@ -285,9 +285,6 @@ void LogStorage::ReadAt(const protocol::SharedLogMessage& request) {
     DCHECK_EQ(request.logspace_id, identifier());
     uint64_t seqnum = bits::JoinTwo32(request.logspace_id, request.seqnum_lowhalf);
     if (seqnum >= seqnum_position()) {
-            HLOG_F(WARNING, "ReadRecord: Add to pending read request. storage_seqnum_position={}, seqnum={}", 
-            bits::HexStr0x(seqnum_position()), bits::HexStr0x(seqnum)
-        );
         pending_read_requests_.insert(std::make_pair(seqnum, request));
         return;
     }
@@ -367,7 +364,6 @@ std::optional<std::vector<uint32_t>> LogStorage::GrabShardProgressForSending() {
 void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
                            uint64_t start_seqnum, uint64_t start_localid,
                            uint32_t delta, uint16_t storage_shard_id) {
-    HVLOG_F(1, "MetalogUpdate: Create index data from metalog_seqnum={}, start_seqnum={}, start_localid={}, delta={}", metalog_seqnum, start_seqnum, start_localid, delta);
     auto iter = pending_read_requests_.begin();
     while (iter != pending_read_requests_.end() && iter->first < start_seqnum) {
         HLOG_F(WARNING, "Read request for seqnum {} has past", bits::HexStr0x(iter->first));
