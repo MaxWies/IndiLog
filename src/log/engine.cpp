@@ -814,15 +814,15 @@ void Engine::StatisticsThreadMain() {
             }
 #endif
 #ifdef __FAAS_OP_STAT
-            std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}-{}.csv", my_node_id(), now_ts));
+            std::ofstream op_st_file(fmt::format("/tmp/slog/stats/op-stat-{}.csv", my_node_id()));
             op_st_file
                 << std::to_string(append_ops_counter_.load())           << ","
                 << std::to_string(read_ops_counter_.load())             << "," 
                 << std::to_string(local_index_hit_counter_.load())      << "," 
                 << std::to_string(local_index_miss_counter_.load())     << "," 
-                << std::to_string(index_min_read_ops_counter_.load())   << "," 
                 << std::to_string(log_cache_hit_counter_.load())        << "," 
-                << std::to_string(log_cache_miss_counter_.load())       << "\n"
+                << std::to_string(log_cache_miss_counter_.load())       << ","
+                << std::to_string(index_min_read_ops_counter_.load())   << "\n"
             ;
             op_st_file.close();
 #endif
