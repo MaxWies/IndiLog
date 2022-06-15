@@ -63,7 +63,7 @@ std::string IndexQuery::DirectionToString() const {
 }
 
 uint32_t IndexQueryResult::StorageShardId() const {
-    CHECK_EQ(state, State::kFound);
+    DCHECK_EQ(state, State::kFound);
     return bits::JoinTwo16(bits::LowHalf32(bits::HighHalf64(found_result.seqnum)), found_result.storage_shard_id);
 }
 

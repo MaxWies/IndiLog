@@ -342,8 +342,7 @@ IndexQueryResult SeqnumSuffixChain::BuildInvalidResult(const IndexQuery& query) 
 }
 
 SeqnumSuffixLink::SeqnumSuffixLink(const View* view, uint16_t sequencer_id, uint32_t metalog_position)
-    : LogSpaceBase(LogSpaceBase::kLogSuffix, view, sequencer_id),
-      first_metalog_(true)
+    : LogSpaceBase(LogSpaceBase::kLogSuffix, view, sequencer_id)
     {
     log_header_ = fmt::format("SeqnumSuffixLink[{}-{}]: ", view->id(), sequencer_id);
     state_ = kNormal;
@@ -355,16 +354,45 @@ SeqnumSuffixLink::~SeqnumSuffixLink() {}
 namespace {
 static inline uint16_t FindStorageShardIdInLinkEntry(uint32_t key_seqnum, const LinkEntry entry, uint32_t query_seqnum) {
     if (query_seqnum > key_seqnum) {
-        LOG_F(WARNING, "Query_seqnum={} is higher than key_seqnum={} of LinkEntry. Result returned is not valid!", query_seqnum, key_seqnum);
-        return entry.storage_shard_ids_.at(0);
+        UNREACHABLE();
     }
-    uint8_t diff = gsl::narrow_cast<uint8_t>(key_seqnum-query_seqnum);
-    auto it = std::upper_bound(entry.key_diffs_.begin(), entry.key_diffs_.end(), diff);
-    if (it == entry.key_diffs_.end()){
+    if (query_seqnum == key_seqnum) {
         return entry.storage_shard_ids_.back();
     }
-    size_t ix = gsl::narrow_cast<size_t>(std::distance(entry.key_diffs_.begin(), it));
-    return entry.storage_shard_ids_.at(ix);
+    uint16_t diff = gsl::narrow_cast<uint16_t>(key_seqnum-query_seqnum);
+    if (diff == 0) {
+        UNREACHABLE();
+    }
+//     size_t ix = entry.key_diffs_.size() - 1;
+//     for (auto it = entry.key_diffs_.rbegin(); it != entry.key_diffs_.rend(); ++it)
+//     {
+//         if (*it - diff == 0){
+//             return entry.storage_shard_ids_.at(ix);
+//         }
+//         if (*it >= diff) {
+//             ix++;
+//             return entry.storage_shard_ids_.at(ix);
+//         }
+//         ix--;
+//     }
+//    return entry.storage_shard_ids_.front();
+
+    auto it = std::lower_bound(entry.key_diffs_.rbegin(), entry.key_diffs_.rend(), diff);
+    if (it == entry.key_diffs_.rend()){
+        // this is ok otherwise we would be in previous LinkEntry
+        return entry.storage_shard_ids_.front();
+    }
+    if (*it - diff == 0){
+        size_t ix = gsl::narrow_cast<size_t>(std::distance(entry.key_diffs_.rbegin(), it));
+        return entry.storage_shard_ids_.at(entry.storage_shard_ids_.size()-1-ix);
+    }
+    if (1 < entry.storage_shard_ids_.size()){
+        it--;
+        size_t ix = gsl::narrow_cast<size_t>(std::distance(entry.key_diffs_.rbegin(), it));
+        return entry.storage_shard_ids_.at(entry.storage_shard_ids_.size()-1-ix);
+    } else {
+        UNREACHABLE();
+    }
 }
 } // namespace
 
@@ -428,11 +456,11 @@ void SeqnumSuffixLink::GetHead(uint64_t* seqnum, uint16_t* storage_shard_id){
     uint32_t key = entries_.begin()->first;
     LinkEntry entry = entries_.begin()->second;
     if(0 < entry.key_diffs_.size()){
-        *seqnum = bits::JoinTwo32(identifier(), key - uint32_t(entry.key_diffs_.back()));
-        *storage_shard_id = entry.storage_shard_ids_.back();
+        *seqnum = bits::JoinTwo32(identifier(), key - uint32_t(entry.key_diffs_.front()));
+        *storage_shard_id = entry.storage_shard_ids_.front();
     } else {
         *seqnum = bits::JoinTwo32(identifier(), key);
-        *storage_shard_id = entry.storage_shard_ids_.front();
+        *storage_shard_id = entry.storage_shard_ids_.back();
     }
 }
 
@@ -441,7 +469,7 @@ void SeqnumSuffixLink::GetTail(uint64_t* seqnum, uint16_t* storage_shard_id){
     uint32_t key = (--entries_.end())->first;
     LinkEntry entry = (--entries_.end())->second;
     *seqnum = bits::JoinTwo32(identifier(), key);
-    *storage_shard_id = entry.storage_shard_ids_.front();
+    *storage_shard_id = entry.storage_shard_ids_.back();
     return;
 }
 
@@ -453,11 +481,11 @@ bool SeqnumSuffixLink::FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_
         return false;
     }
     GetHead(seqnum, storage_shard_id);
-    if (query_seqnum + 1 < *seqnum) {
+    if (query_seqnum < *seqnum) {
         HVLOG(1) << ("SuffixRead: query seqnum before head -> empty");
         return false;
     }
-    if (query_seqnum == *seqnum || query_seqnum + 1 == *seqnum) {
+    if (query_seqnum == *seqnum) {
         HVLOG(1) << ("SuffixRead: query seqnum at my head -> found");
         return true;
     }
@@ -466,30 +494,33 @@ bool SeqnumSuffixLink::FindNext(uint64_t query_seqnum, uint64_t* seqnum, uint16_
         HVLOG(1) << ("SuffixRead: Query seqnum behind tail -> empty");
         return false;
     }
-    // invariant 1: seqnum lies between head and last element
-    // invariant 2: seqnum has exact match (no closest to some other seqnum)
-    uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
-    uint32_t entry_lower_key;
-    LinkEntry* entry_lower = nullptr;
-    LinkEntry* entry_upper = nullptr;
-    auto it = entries_.upper_bound(local_seqnum);
-    DCHECK(it != entries_.end()); // because of invariant
-    uint32_t entry_upper_key = it->first;
-    entry_upper = &it->second;
-    if (it != entries_.begin() && it != entries_.end()){
-        --it;
-        entry_lower_key = it->first;
-        entry_lower = &it->second;
-    }
-    // check if key match of lower happened
-    if (entry_lower != nullptr && local_seqnum == entry_lower_key){
-        *seqnum = query_seqnum;
-        *storage_shard_id = entry_lower->storage_shard_ids_.front();
-        HVLOG(1) << ("SuffixRead: Query seqnum matches a lower key -> found");
+    if (query_seqnum == *seqnum) {
+        HVLOG(1) << ("SuffixRead: query seqnum at tail -> found");
         return true;
     }
+    // invariant 1: seqnum lies between head and last element
+    // invariant 2: seqnum has exact match (no closest to some other seqnum)
+    // we have a point it
+    uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
+    // uint32_t entry_lower_key;
+    // LinkEntry* entry_lower = nullptr;
+    // LinkEntry* entry_upper = nullptr;
+    auto it = entries_.upper_bound(local_seqnum);
+    DCHECK(it != entries_.end()); // because of invariant
+
+    // check key hit
+    if (it != entries_.begin()){
+        auto lower = it;
+        --lower;
+        if(lower->first == local_seqnum){
+            *seqnum = query_seqnum;
+            *storage_shard_id = lower->second.storage_shard_ids_.back();
+            return true;
+        }
+    }
+
     *seqnum = query_seqnum;
-    *storage_shard_id = FindStorageShardIdInLinkEntry(entry_upper_key, *entry_upper, local_seqnum);
+    *storage_shard_id = FindStorageShardIdInLinkEntry(it->first, it->second, local_seqnum);
     HVLOG(1) << ("SuffixRead: Query seqnum within my range -> found");
     return true;
 }
@@ -512,13 +543,24 @@ bool SeqnumSuffixLink::FindPrev(uint64_t query_seqnum, uint64_t* seqnum, uint16_
     }
     // invariant 1: seqnum lies between head and last element
     // invariant 2: seqnum has exact match (no closest to some other seqnum)
+    // we have a point hit
     uint32_t local_seqnum = bits::LowHalf64(query_seqnum);
-    auto it = entries_.lower_bound(local_seqnum);
+    auto it = entries_.upper_bound(local_seqnum);
     DCHECK(it != entries_.end()); // because of invariant
-    uint32_t key = it->first;
-    LinkEntry entry = it->second;
+
+    // check key hit
+    if (it != entries_.begin()){
+        auto lower = it;
+        --lower;
+        if(lower->first == local_seqnum){
+            *seqnum = query_seqnum;
+            *storage_shard_id = lower->second.storage_shard_ids_.back();
+            return true;
+        }
+    }
+
     *seqnum = query_seqnum;
-    *storage_shard_id = FindStorageShardIdInLinkEntry(key, entry, local_seqnum);
+    *storage_shard_id = FindStorageShardIdInLinkEntry(it->first, it->second, local_seqnum);
     HVLOG(1) << ("SuffixRead: Query seqnum within my range -> found");
     return true;
 }

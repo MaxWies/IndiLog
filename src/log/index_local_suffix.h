@@ -29,20 +29,19 @@ struct LinkEntryCompressed {
 struct LinkEntry{
     LinkEntry(std::vector<std::pair<uint16_t, uint32_t>> productive_shards)
     : storage_shard_ids_(absl::FixedArray<uint16_t>(productive_shards.size(), 0)),
-      key_diffs_(absl::FixedArray<uint8_t>(productive_shards.size()-1, 0))
+      key_diffs_(absl::FixedArray<uint16_t>(productive_shards.size(), 0))
     {
         DCHECK(0 < productive_shards.size());
         auto& [key_shard, key_seqnum] = productive_shards.back();
-        for(size_t i = productive_shards.size() - 1; i > 0; i--) {
+        for(size_t i = 0; i < productive_shards.size(); i++) {
             auto& [shard, seqnum] = productive_shards.at(i);
             DCHECK(key_seqnum > seqnum);
-            key_diffs_.at(i-1) = gsl::narrow_cast<uint8_t>(key_seqnum - seqnum);
+            key_diffs_.at(i) = gsl::narrow_cast<uint16_t>(key_seqnum - seqnum);
             storage_shard_ids_.at(i) = shard;
         }
-        storage_shard_ids_.at(0) = key_shard;
     }
     absl::FixedArray<uint16_t> storage_shard_ids_;
-    absl::FixedArray<uint8_t> key_diffs_;
+    absl::FixedArray<uint16_t> key_diffs_;
 };
 
 class SeqnumSuffixLink final : public LogSpaceBase {
@@ -69,8 +68,6 @@ public:
 
 private:
     std::map<uint32_t, LinkEntry> entries_;
-
-    bool first_metalog_;
 
     void OnNewLogs(std::vector<std::pair<uint16_t, uint32_t>> productive_cuts) override;
     

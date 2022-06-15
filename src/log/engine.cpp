@@ -783,7 +783,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
                 op, SharedLogResultType::EMPTY, message.user_metalog_progress);
         } else if (result == SharedLogResultType::DATA_LOST) {
             HLOG_F(WARNING, "Receive DATA_LOST response for read request: seqnum={}, tag={}",
-                   op->seqnum, op->query_tag);
+                   bits::HexStr0x(op->seqnum), op->query_tag);
             FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         } else {
             UNREACHABLE();
