@@ -87,7 +87,8 @@ message MetaLogProto {
     }
     TrimProto trim_proto = 5;
 
-    repeated uint32 productive_storage_shard_ids = 6;
+    uint32 num_productive_storage_shards_ids = 6;
+    repeated uint32 active_storage_shard_ids = 7;
 }
 
 message MetaLogsProto {

@@ -115,7 +115,7 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             continue;
         }
         MetaLogProto* meta_log = iter->second;
-        if (meta_log->metalog_seqnum() != metalog_position_){
+        if (!CanApplyMetaLog(*meta_log)){
             break;
         }
         ApplyMetaLog(*meta_log);
@@ -143,8 +143,8 @@ bool LogSpaceBase::CanApplyMetaLog(const MetaLogProto& meta_log) {
     case kLogProducer:
         switch (meta_log.type()) {
         case MetaLogProto::NEW_LOGS:
-            for (int i = 0; i < meta_log.productive_storage_shard_ids_size(); i++) {
-                uint32_t storage_shard = meta_log.productive_storage_shard_ids().at(i);
+            for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
+                uint32_t storage_shard = meta_log.active_storage_shard_ids().at(i);
                 uint16_t local_storage_shard = gsl::narrow_cast<uint16_t>(storage_shard);
                 if (interested_shards_.contains(local_storage_shard)){
                     uint32_t shard_start = meta_log.new_logs_proto().shard_starts(
@@ -183,13 +183,15 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                     HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                             meta_log.metalog_seqnum(), start_seqnum);
                     std::vector<std::pair<uint16_t, uint32_t>> productive_cuts_;
-                    for (int i = 0; i < meta_log.productive_storage_shard_ids_size(); i++) {
-                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.productive_storage_shard_ids(i));
-                        uint32_t shard_start = new_logs.shard_starts(i);
-                        uint32_t delta = new_logs.shard_deltas(i);
+                    for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
+                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.active_storage_shard_ids(i));
+                        uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));
+                        uint32_t delta = new_logs.shard_deltas(static_cast<int>(i));
                         shard_progresses_[storage_shard_id] = shard_start + delta;
                         start_seqnum += delta;
-                        productive_cuts_.push_back(std::make_pair(storage_shard_id, start_seqnum - 1));
+                        if (0 < delta){
+                            productive_cuts_.push_back(std::make_pair(storage_shard_id, start_seqnum - 1));
+                        }
                     }
                     DCHECK_GT(start_seqnum, seqnum_position_);
                     seqnum_position_ = start_seqnum;
@@ -202,8 +204,8 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                     uint32_t start_seqnum = new_logs.start_seqnum();
                     HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                             meta_log.metalog_seqnum(), start_seqnum);
-                    for (int i = 0; i < meta_log.productive_storage_shard_ids_size(); i++) {
-                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.productive_storage_shard_ids(i));
+                    for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
+                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.active_storage_shard_ids(i));
                         uint32_t shard_start = new_logs.shard_starts(i);
                         uint32_t delta = new_logs.shard_deltas(i);
                         uint64_t start_localid = bits::JoinTwo32(storage_shard_id, shard_start);

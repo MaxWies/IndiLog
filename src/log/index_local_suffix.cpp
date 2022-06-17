@@ -445,7 +445,7 @@ void SeqnumSuffixLink::Aggregate(size_t* num_link_entries, size_t* num_range_ent
         *size += (
               sizeof(uint32_t) * 1                                          // key
             + sizeof(uint16_t) * entry.second.storage_shard_ids_.size()     // productive shards
-            + sizeof(uint8_t) * entry.second.key_diffs_.size()              // relative seqnums
+            + sizeof(uint16_t) * entry.second.key_diffs_.size()              // relative seqnums
         );
     }
 }
