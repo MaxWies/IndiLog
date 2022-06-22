@@ -12,10 +12,10 @@
 namespace faas {
 namespace log {
 
-class MergerBase : public server::ServerBase {
+class AggregatorBase : public server::ServerBase {
 public:
-    explicit MergerBase(uint16_t node_id);
-    virtual ~MergerBase();
+    explicit AggregatorBase(uint16_t node_id);
+    virtual ~AggregatorBase();
 
     void StartInternal() override;
     void StopInternal() override;
@@ -74,7 +74,7 @@ private:
 
     void OnNodeOffline(node::NodeType node_type, uint16_t node_id) override;
 
-    DISALLOW_COPY_AND_ASSIGN(MergerBase);
+    DISALLOW_COPY_AND_ASSIGN(AggregatorBase);
 };
 
 }  // namespace log

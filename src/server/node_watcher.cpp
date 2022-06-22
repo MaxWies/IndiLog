@@ -59,9 +59,9 @@ bool NodeWatcher::ParseNodePath(std::string_view path,
     } else if (absl::StartsWith(path, "index_")) {
         prefix = "index_";
         *node_type = NodeType::kIndexNode;
-    } else if (absl::StartsWith(path, "merger_")) {
-        prefix = "merger_";
-        *node_type = NodeType::kMergerNode;
+    } else if (absl::StartsWith(path, "aggregator_")) {
+        prefix = "aggregator_";
+        *node_type = NodeType::kAggregatorNode;
     } else {
         LOG(ERROR) << "Unknown type of node: " << path;
         return false;
@@ -136,10 +136,10 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::INDEX_TO_ENGINE,        NODE_PAIR(Index, Engine) },
     { ConnType::STORAGE_TO_INDEX,       NODE_PAIR(Storage, Index) },
     { ConnType::INDEX_TO_STORAGE,       NODE_PAIR(Index, Storage) },
-    { ConnType::INDEX_TO_MERGER,        NODE_PAIR(Index, Merger) },
-    { ConnType::ENGINE_TO_MERGER,       NODE_PAIR(Engine, Merger) },
-    { ConnType::MERGER_TO_ENGINE,       NODE_PAIR(Merger, Engine) },
-    { ConnType::MERGER_TO_STORAGE,      NODE_PAIR(Merger, Storage) },
+    { ConnType::INDEX_TO_AGGREGATOR,    NODE_PAIR(Index, Aggregator) },
+    { ConnType::ENGINE_TO_AGGREGATOR,   NODE_PAIR(Engine, Aggregator) },
+    { ConnType::AGGREGATOR_TO_ENGINE,   NODE_PAIR(Aggregator, Engine) },
+    { ConnType::AGGREGATOR_TO_STORAGE,  NODE_PAIR(Aggregator, Storage) },
     { ConnType::INDEX_TO_INDEX,         NODE_PAIR(Index, Index) },
 };
 

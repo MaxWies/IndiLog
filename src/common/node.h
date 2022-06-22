@@ -8,13 +8,13 @@ namespace faas {
 namespace node {
 
 enum NodeType {
-    kGatewayNode   = 0,
-    kEngineNode    = 1,
-    kSequencerNode = 2,
-    kStorageNode   = 3,
-    kIndexNode     = 4,
-    kMergerNode    = 5,
-    kTotalNodeType = 6
+    kGatewayNode     = 0,
+    kEngineNode      = 1,
+    kSequencerNode   = 2,
+    kStorageNode     = 3,
+    kIndexNode       = 4,
+    kAggregatorNode  = 5,
+    kTotalNodeType   = 6
 };
 
 static constexpr const char* kNodeTypeStr[] = {
@@ -23,7 +23,7 @@ static constexpr const char* kNodeTypeStr[] = {
     "SequencerNode",
     "StorageNode",
     "IndexNode",
-    "MergerNode"
+    "AggregatorNode"
 };
 
 

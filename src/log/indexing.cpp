@@ -137,8 +137,8 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     DCHECK(  op_type == SharedLogOpType::READ_NEXT
           || op_type == SharedLogOpType::READ_PREV
           || op_type == SharedLogOpType::READ_NEXT_B);
-    DCHECK(  request.merge_type == protocol::kUseMasterSlave 
-          || request.merge_type == protocol::kUseAggregator);
+    DCHECK(  request.aggregator_type == protocol::kUseMasterSlave 
+          || request.aggregator_type == protocol::kUseAggregator);
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -315,20 +315,20 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     if (my_query_result.IsPointHit()){
         ForwardReadRequest(my_query_result);
     }
-    if (my_query_result.original_query.master_node_id != my_node_id()){
+    if (my_query_result.original_query.aggregate_type == protocol::kUseAggregator || my_query_result.original_query.master_node_id != my_node_id()){
         SendMasterIndexResult(my_query_result);
         return;
     } 
-    IndexQueryResult merged_index_query_result;
-    bool merge_complete = MergeIndexResult(my_node_id(), my_query_result, &merged_index_query_result);
-    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()) {
-        ForwardReadRequest(merged_index_query_result);
-    } else if (merge_complete && !merged_index_query_result.IsFound()){
-        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+    IndexQueryResult aggregated_index_query_result;
+    bool aggregate_complete = AggregateIndexResult(my_node_id(), my_query_result, &aggregated_index_query_result);
+    if (aggregate_complete && aggregated_index_query_result.IsFound() && !aggregated_index_query_result.IsPointHit()) {
+        ForwardReadRequest(aggregated_index_query_result);
+    } else if (aggregate_complete && !aggregated_index_query_result.IsFound()){
+        SendIndexReadFailureResponse(aggregated_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
     }
 }
 
-bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
+bool IndexNode::AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result){
     HVLOG_F(1, "IndexRead: Index result received. index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
         index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
         bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
@@ -344,7 +344,7 @@ bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const Index
         HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result_other.original_query.origin_node_id);
         return false;
     }
-    return engine_index_read_op->Merge(num_index_shards, index_node_id_other, index_query_result_other, merged_index_query_result);
+    return engine_index_read_op->Aggregate(num_index_shards, index_node_id_other, index_query_result_other, aggregated_index_query_result);
 }
 
 void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
@@ -352,13 +352,13 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_PREV_INDEX_RESULT ||
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_B_INDEX_RESULT);
     IndexQueryResult slave_index_query_result = BuildIndexResult(message);
-    IndexQueryResult merged_index_query_result;
-    bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
-    if (merge_complete){
-        if (merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
-            ForwardReadRequest(merged_index_query_result);
-        } else if (!merged_index_query_result.IsFound()){
-            SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+    IndexQueryResult aggregated_index_query_result;
+    bool aggregate_complete = AggregateIndexResult(message.origin_node_id, slave_index_query_result, &aggregated_index_query_result);
+    if (aggregate_complete){
+        if (aggregated_index_query_result.IsFound() && !aggregated_index_query_result.IsPointHit()){
+            ForwardReadRequest(aggregated_index_query_result);
+        } else if (!aggregated_index_query_result.IsFound()){
+            SendIndexReadFailureResponse(aggregated_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
         }
     }
 }
@@ -478,16 +478,16 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
         .user_tag = message.query_tag,
         .query_seqnum = message.query_seqnum,
         .metalog_progress = message.user_metalog_progress,
-        .master_node_id = message.merger_node_id,
+        .master_node_id = message.aggregator_node_id,
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
             .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
         },
     };
-    if(message.merge_type == protocol::kUseAggregator || message.merge_type == protocol::kUseMasterSlave){
-        index_query.master_node_id = message.merger_node_id;
-        index_query.merge_type = message.merge_type;
+    if(message.aggregator_type == protocol::kUseAggregator || message.aggregator_type == protocol::kUseMasterSlave){
+        index_query.master_node_id = message.aggregator_node_id;
+        index_query.aggregate_type = message.aggregator_type;
         index_query.prev_found_result = IndexFoundResult {
             .view_id = 0,
             .storage_shard_id = 0,

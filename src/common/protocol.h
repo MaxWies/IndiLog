@@ -133,8 +133,8 @@ enum class SharedLogResultType : uint16_t {
     REGISTER_UNBLOCK = 0x46,
     REGISTER_INDEX_OK = 0x47,
     REGISTER_INDEX_FAILED = 0x48,
-    REGISTER_MERGER_OK = 0x49,
-    REGISTER_MERGER_FAILED = 0x50
+    REGISTER_AGGREGATOR_OK = 0x49,
+    REGISTER_AGGREGATOR_FAILED = 0x50
 };
 
 constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
@@ -210,10 +210,10 @@ enum class ConnType : uint16_t {
     INDEX_TO_ENGINE        = 11,  // Index response
     STORAGE_TO_INDEX       = 12,  // Index update
     INDEX_TO_STORAGE       = 13,  // Forward read request
-    INDEX_TO_MERGER        = 14,  // Aggregation indexing
-    MERGER_TO_STORAGE      = 15,  // Forward read request
-    MERGER_TO_ENGINE       = 16,  // Index fail response
-    ENGINE_TO_MERGER       = 17,  // Registration
+    INDEX_TO_AGGREGATOR    = 14,  // Aggregation indexing
+    AGGREGATOR_TO_STORAGE  = 15,  // Forward read request
+    AGGREGATOR_TO_ENGINE   = 16,  // Index fail response
+    ENGINE_TO_AGGREGATOR   = 17,  // Registration
     INDEX_TO_INDEX         = 18,  // Master slave indexing
 };
 
@@ -291,8 +291,8 @@ struct SharedLogMessage {
             uint16_t found_view_id; // (used by MERGING)
         } __attribute__ ((packed));
         struct {
-            uint16_t merge_type;
-            uint16_t merger_node_id; // (only used for index tier)
+            uint16_t aggregator_type;
+            uint16_t aggregator_node_id; // (only used for index tier)
         } __attribute__ ((packed));
         uint32_t local_start_id;   // (only used by REGISTRATION)
     };

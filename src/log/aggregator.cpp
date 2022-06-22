@@ -1,4 +1,4 @@
-#include "log/merger.h"
+#include "log/aggregator.h"
 
 #include "log/flags.h"
 #include "log/utils.h"
@@ -14,15 +14,15 @@ using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
 using protocol::SharedLogResultType;
 
-Merger::Merger(uint16_t node_id)
-    : MergerBase(node_id),
+Aggregator::Aggregator(uint16_t node_id)
+    : AggregatorBase(node_id),
       log_header_(fmt::format("Index[{}-N]: ", node_id)),
       current_view_(nullptr),
       current_view_active_(false) {}
 
-Merger::~Merger() {}
+Aggregator::~Aggregator() {}
 
-void Merger::OnViewCreated(const View* view) {
+void Aggregator::OnViewCreated(const View* view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "New view {} created", view->id());
     bool contains_myself = view->contains_index_node(my_node_id());
@@ -56,12 +56,12 @@ void Merger::OnViewCreated(const View* view) {
     }
 }
 
-void Merger::OnViewFinalized(const FinalizedView* finalized_view) {
+void Aggregator::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
 }
 
-void Merger::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
+void Aggregator::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
     DCHECK(SharedLogMessageHelper::GetOpType(received_message) == SharedLogOpType::REGISTER);
     DCHECK(SharedLogMessageHelper::GetResultType(received_message) == SharedLogResultType::REGISTER_ENGINE);
     absl::MutexLock view_lk(&view_mu_);
@@ -69,7 +69,7 @@ void Merger::OnRecvRegistration(const protocol::SharedLogMessage& received_messa
         HLOG_F(WARNING, "Current view not the same. register_view={}, my_current_view={}", received_message.view_id, current_view_->id());
         HLOG(WARNING) << "Registration failed";
         SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
-            SharedLogResultType::REGISTER_MERGER_FAILED,
+            SharedLogResultType::REGISTER_AGGREGATOR_FAILED,
             current_view_->id(),
             received_message.sequencer_id,
             received_message.storage_shard_id,
@@ -87,7 +87,7 @@ void Merger::OnRecvRegistration(const protocol::SharedLogMessage& received_messa
     ongoing_engine_index_reads_[received_message.engine_node_id].reset(engine_index_read_ops);
     HLOG_F(INFO, "Registration ok. engine_id={}", received_message.engine_node_id);
     SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
-            SharedLogResultType::REGISTER_MERGER_OK,
+            SharedLogResultType::REGISTER_AGGREGATOR_OK,
             received_message.view_id,
             received_message.sequencer_id,
             received_message.storage_shard_id,
@@ -97,49 +97,49 @@ void Merger::OnRecvRegistration(const protocol::SharedLogMessage& received_messa
     SendRegistrationResponse(received_message, &response);
 }
 
-void Merger::RemoveEngineNode(uint16_t engine_node_id){
+void Aggregator::RemoveEngineNode(uint16_t engine_node_id){
     absl::MutexLock view_lk(&view_mu_);
     if (ongoing_engine_index_reads_.contains(engine_node_id)){
         ongoing_engine_index_reads_.erase(engine_node_id);
     }
 }
 
-bool Merger::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
+bool Aggregator::AggregateIndexResult(const uint16_t index_node_id, const IndexQueryResult& index_query_result, IndexQueryResult* aggregated_index_query_result){
     HVLOG_F(1, "IndexRead: Index result received. index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
-        index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
-        bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
+        index_node_id, index_query_result.original_query.origin_node_id, bits::HexStr0x(index_query_result.original_query.client_data), 
+        bits::HexStr0x(index_query_result.original_query.query_seqnum)
     );
     EngineIndexReadOp* engine_index_read_op = nullptr;
     size_t num_index_shards; 
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         num_index_shards = current_view_->num_index_shards();
-        engine_index_read_op = ongoing_engine_index_reads_.at(index_query_result_other.original_query.origin_node_id).get();
+        engine_index_read_op = ongoing_engine_index_reads_.at(index_query_result.original_query.origin_node_id).get();
     }
     if (engine_index_read_op == nullptr) {
-        HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result_other.original_query.origin_node_id);
+        HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result.original_query.origin_node_id);
         return false;
     }
-    return engine_index_read_op->Merge(num_index_shards, index_node_id_other, index_query_result_other, merged_index_query_result);
+    return engine_index_read_op->Aggregate(num_index_shards, index_node_id, index_query_result, aggregated_index_query_result);
 }
 
-void Merger::HandleSlaveResult(const protocol::SharedLogMessage& message){
+void Aggregator::HandleSlaveResult(const protocol::SharedLogMessage& message){
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_INDEX_RESULT || 
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_PREV_INDEX_RESULT ||
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_B_INDEX_RESULT);
     IndexQueryResult slave_index_query_result = BuildIndexResult(message);
-    IndexQueryResult merged_index_query_result;
-    bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
-    if (merge_complete){
-        if (merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
-            ForwardReadRequest(merged_index_query_result);
-        } else if (!merged_index_query_result.IsFound()){
-            SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+    IndexQueryResult aggregated_index_query_result;
+    bool aggregate_complete = AggregateIndexResult(message.origin_node_id, slave_index_query_result, &aggregated_index_query_result);
+    if (aggregate_complete){
+        if (aggregated_index_query_result.IsFound() && !aggregated_index_query_result.IsPointHit()){
+            ForwardReadRequest(aggregated_index_query_result);
+        } else if (!aggregated_index_query_result.IsFound()){
+            SendIndexReadFailureResponse(aggregated_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
         }
     }
 }
 
-void Merger::ForwardReadRequest(const IndexQueryResult& query_result){
+void Aggregator::ForwardReadRequest(const IndexQueryResult& query_result){
     DCHECK(query_result.state == IndexQueryResult::kFound);
     const View::StorageShard* storage_shard = nullptr;
     uint32_t logspace_id;
@@ -163,13 +163,13 @@ void Merger::ForwardReadRequest(const IndexQueryResult& query_result){
     }
 }
 
-void Merger::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
+void Aggregator::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
     for (const SharedLogRequest& request : requests) {
         MessageHandler(request.message, STRING_AS_SPAN(request.payload));
     }
 }
 
-IndexQueryResult Merger::BuildIndexResult(protocol::SharedLogMessage message){
+IndexQueryResult Aggregator::BuildIndexResult(protocol::SharedLogMessage message){
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     return IndexQueryResult {
         .state = message.found_seqnum == kInvalidLogSeqNum ? 

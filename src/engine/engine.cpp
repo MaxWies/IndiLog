@@ -158,7 +158,7 @@ void Engine::OnConnectionClose(ConnectionBase* connection) {
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
     case kIndexIngressTypeId:
-    case kMergerIngressTypeId:
+    case kAggregatorIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
@@ -166,7 +166,7 @@ void Engine::OnConnectionClose(ConnectionBase* connection) {
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
     case kIndexEgressHubTypeId:
-    case kMergerEgressHubTypeId:
+    case kAggregatorEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));
@@ -674,7 +674,7 @@ void Engine::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
     case protocol::ConnType::STORAGE_TO_ENGINE:
     case protocol::ConnType::SLOG_ENGINE_TO_ENGINE:
     case protocol::ConnType::INDEX_TO_ENGINE:
-    case protocol::ConnType::MERGER_TO_ENGINE:
+    case protocol::ConnType::AGGREGATOR_TO_ENGINE:
         if (enable_shared_log_) {
             CreateSharedLogIngressConn(sockfd, type, handshake.src_node_id);
             break;

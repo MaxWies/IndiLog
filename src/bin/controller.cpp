@@ -10,7 +10,7 @@ ABSL_FLAG(size_t, metalog_replicas, 3, "Replicas for meta logs");
 ABSL_FLAG(size_t, userlog_replicas, 3, "Replicas for users' logs");
 ABSL_FLAG(size_t, index_replicas, 3, "Replicas for log index");
 ABSL_FLAG(size_t, index_shards, 1, "Index shards");
-ABSL_FLAG(size_t, merger_replicas, 0, "Replicas for merger. 0 is master slave architecture");
+ABSL_FLAG(size_t, aggregator_replicas, 0, "Replicas for aggregator. 0 is master slave architecture");
 ABSL_FLAG(size_t, num_phylogs, 1, "Number of physical logs");
 ABSL_FLAG(size_t, max_num_storage_shards, 4, "Max number of storage shards of a physcial log");
 
@@ -35,7 +35,7 @@ void ControllerMain(int argc, char* argv[]) {
     controller->set_userlog_replicas(absl::GetFlag(FLAGS_userlog_replicas));
     controller->set_index_replicas(absl::GetFlag(FLAGS_index_replicas));
     controller->set_index_shards(absl::GetFlag(FLAGS_index_shards));
-    controller->set_merger_replicas(absl::GetFlag(FLAGS_merger_replicas));
+    controller->set_aggregator_replicas(absl::GetFlag(FLAGS_aggregator_replicas));
     controller->set_num_phylogs(absl::GetFlag(FLAGS_num_phylogs));
     controller->set_max_num_storage_shards(absl::GetFlag(FLAGS_max_num_storage_shards));
 

@@ -58,8 +58,8 @@ message ViewProto {
     // [Log Index Tier]
     repeated uint32 index_nodes = 13;
     repeated uint32 index_tier_plan = 14;
-    uint32 merger_replicas   = 15;
-    repeated uint32 merger_nodes = 16;
+    uint32 aggregator_replicas   = 15;
+    repeated uint32 aggregator_nodes = 16;
 }
 
 message MetaLogProto {

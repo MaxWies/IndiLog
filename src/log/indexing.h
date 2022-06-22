@@ -56,7 +56,7 @@ private:
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void HandleSlaveResult(const protocol::SharedLogMessage& message) override;
-    bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
+    bool AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result);
 
     void ProcessIndexResult(const IndexQueryResult& query_result);
     // void ProcessIndexMinResult(const IndexQueryResult& query_result);

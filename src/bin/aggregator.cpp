@@ -1,7 +1,7 @@
 #include "base/init.h"
 #include "base/common.h"
 #include "utils/env_variables.h"
-#include "log/merger.h"
+#include "log/aggregator.h"
 
 ABSL_FLAG(int, node_id, -1,
           "My node ID. Also settable through environment variable FAAS_NODE_ID.");
@@ -16,7 +16,7 @@ static void StopServerHandler() {
     }
 }
 
-void MergerMain(int argc, char* argv[]) {
+void AggregatorMain(int argc, char* argv[]) {
     base::InitMain(argc, argv);
     base::SetInterruptHandler(StopServerHandler);
 
@@ -27,16 +27,16 @@ void MergerMain(int argc, char* argv[]) {
     if (node_id == -1) {
         LOG(FATAL) << "Node ID not set!";
     }
-    auto merger = std::make_unique<log::Merger>(node_id);
+    auto aggregator = std::make_unique<log::Aggregator>(node_id);
 
-    merger->Start();
-    server_ptr.store(merger.get());
-    merger->WaitForFinish();
+    aggregator->Start();
+    server_ptr.store(aggregator.get());
+    aggregator->WaitForFinish();
 }
 
 }  // namespace faas
 
 int main(int argc, char* argv[]) {
-    faas::MergerMain(argc, argv);
+    faas::AggregatorMain(argc, argv);
     return 0;
 }

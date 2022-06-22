@@ -24,7 +24,7 @@ public:
     void set_userlog_replicas(size_t value) { userlog_replicas_ = value; }
     void set_index_replicas(size_t value) { index_replicas_ = value; }
     void set_index_shards(size_t value) { index_shards_ = value; }
-    void set_merger_replicas(size_t value) { merger_replicas_ = value; }
+    void set_aggregator_replicas(size_t value) { aggregator_replicas_ = value; }
     void set_num_phylogs(size_t value) { num_phylogs_ = value; }
     void set_max_num_storage_shards(size_t value) { max_num_storage_shards_ = value; }
 
@@ -41,7 +41,7 @@ private:
     size_t userlog_replicas_;
     size_t index_replicas_;
     size_t index_shards_;
-    size_t merger_replicas_;
+    size_t aggregator_replicas_;
     size_t num_phylogs_;
     size_t max_num_storage_shards_;
 
@@ -59,7 +59,7 @@ private:
     std::set</* node_id */ uint16_t> sequencer_nodes_;
     std::set</* node_id */ uint16_t> storage_nodes_;
     std::set</* node_id */ uint16_t> index_nodes_;
-    std::set</* node_id */ uint16_t> merger_nodes_;
+    std::set</* node_id */ uint16_t> aggregator_nodes_;
 
     std::set</* node_id */ uint16_t> current_engine_nodes_;
 
@@ -78,7 +78,7 @@ private:
         NodeIdVec sequencer_nodes;
         NodeIdVec storage_nodes;
         NodeIdVec index_nodes;
-        NodeIdVec merger_nodes;
+        NodeIdVec aggregator_nodes;
     };
     std::optional<Configuration> pending_reconfig_;
 

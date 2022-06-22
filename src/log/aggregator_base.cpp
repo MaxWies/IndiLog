@@ -1,10 +1,10 @@
-#include "log/merger_base.h"
+#include "log/aggregator_base.h"
 
 #include "log/flags.h"
 #include "server/constants.h"
 #include "utils/fs.h"
 
-#define log_header_ "MergerBase: "
+#define log_header_ "AggregatorBase: "
 
 namespace faas {
 namespace log {
@@ -21,20 +21,20 @@ using server::IngressConnection;
 using server::EgressHub;
 using server::NodeWatcher;
 
-MergerBase::MergerBase(uint16_t node_id)
-    : ServerBase(node_id, fmt::format("merger_{}", node_id), NodeType::kMergerNode),
+AggregatorBase::AggregatorBase(uint16_t node_id)
+    : ServerBase(node_id, fmt::format("aggregator_{}", node_id), NodeType::kAggregatorNode),
       node_id_(node_id) {}
 
-MergerBase::~MergerBase() {}
+AggregatorBase::~AggregatorBase() {}
 
-void MergerBase::StartInternal() {
+void AggregatorBase::StartInternal() {
     SetupZKWatchers();
     SetupTimers();
 }
 
-void MergerBase::StopInternal() {}
+void AggregatorBase::StopInternal() {}
 
-void MergerBase::SetupZKWatchers() {
+void AggregatorBase::SetupZKWatchers() {
     view_watcher_.SetViewCreatedCallback(
         [this] (const View* view) {
             this->OnViewCreated(view);
@@ -53,11 +53,11 @@ void MergerBase::SetupZKWatchers() {
     view_watcher_.StartWatching(zk_session());
 }
 
-void MergerBase::SetupTimers() {
+void AggregatorBase::SetupTimers() {
     
 }
 
-void MergerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+void AggregatorBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
                                         const SharedLogMessage& message,
                                         std::span<const char> payload) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
@@ -72,7 +72,7 @@ void MergerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
     MessageHandler(message, payload);
 }
 
-void MergerBase::MessageHandler(const SharedLogMessage& message,
+void AggregatorBase::MessageHandler(const SharedLogMessage& message,
                                  std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
     case SharedLogOpType::READ_NEXT_INDEX_RESULT:
@@ -88,7 +88,7 @@ void MergerBase::MessageHandler(const SharedLogMessage& message,
         UNREACHABLE();
     }
 }
-void MergerBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {
+void AggregatorBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(result);
     response.origin_node_id = node_id_;
     response.hop_times = query.hop_times + 1;
@@ -96,7 +96,7 @@ void MergerBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol:
     response.payload_size = 0; // necessary?
     uint16_t engine_id = query.origin_node_id;
     bool success = SendSharedLogMessage(
-        protocol::ConnType::MERGER_TO_ENGINE,
+        protocol::ConnType::AGGREGATOR_TO_ENGINE,
         engine_id, response);
     if (!success) {
         HLOG_F(WARNING, "IndexRead: Failed to send index read failure response to engine={}", engine_id);
@@ -104,7 +104,7 @@ void MergerBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol:
     HVLOG_F(1, "IndexRead: Sent index read failure response to engine={}", engine_id);
 }
 
-bool MergerBase::SendStorageReadRequest(const IndexQueryResult& result,
+bool AggregatorBase::SendStorageReadRequest(const IndexQueryResult& result,
                                         const View::StorageShard* storage_shard_node) {
     HVLOG_F(1, "IndexRead: Send StorageReadRequest for seqnum={}", bits::HexStr0x(result.found_result.seqnum));
     static constexpr int kMaxRetries = 3;
@@ -122,7 +122,7 @@ bool MergerBase::SendStorageReadRequest(const IndexQueryResult& result,
         uint16_t storage_id = storage_shard_node->PickStorageNode();
         HVLOG_F(1, "IndexRead: Forward read request on behalf of engine_node={} to storage_node={}", request.origin_node_id, storage_id);
         bool success = SendSharedLogMessage(
-            protocol::ConnType::MERGER_TO_STORAGE, storage_id, request);
+            protocol::ConnType::AGGREGATOR_TO_STORAGE, storage_id, request);
         if (success) {
             return true;
         }
@@ -130,20 +130,20 @@ bool MergerBase::SendStorageReadRequest(const IndexQueryResult& result,
     return false;
 }
 
-void MergerBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
+void AggregatorBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
     response->origin_node_id = node_id_;
     response->hop_times = request.hop_times + 1;
     response->payload_size = 0;
-    SendSharedLogMessage(protocol::ConnType::MERGER_TO_ENGINE, request.origin_node_id, *response);
+    SendSharedLogMessage(protocol::ConnType::AGGREGATOR_TO_ENGINE, request.origin_node_id, *response);
 }
 
-bool MergerBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
+bool AggregatorBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
                                        const SharedLogMessage& message,
                                        std::span<const char> payload1) {
     DCHECK_EQ(size_t{message.payload_size}, payload1.size());
     EgressHub* hub = CurrentIOWorkerChecked()->PickOrCreateConnection<EgressHub>(
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
-        absl::bind_front(&MergerBase::CreateEgressHub, this, conn_type, dst_node_id));
+        absl::bind_front(&AggregatorBase::CreateEgressHub, this, conn_type, dst_node_id));
     if (hub == nullptr) {
         HLOG_F(WARNING, "Failed to send shared log message. Hub is null. Connection type {}", gsl::narrow_cast<uint16_t>(conn_type));
         return false;
@@ -154,15 +154,15 @@ bool MergerBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst
     return true;
 }
 
-void MergerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
+void AggregatorBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
                                       int sockfd) {
     protocol::ConnType type = static_cast<protocol::ConnType>(handshake.conn_type);
     uint16_t src_node_id = handshake.src_node_id;
 
     switch (type) {
-    case protocol::ConnType::INDEX_TO_MERGER:
+    case protocol::ConnType::INDEX_TO_AGGREGATOR:
         break;
-    case protocol::ConnType::ENGINE_TO_MERGER:
+    case protocol::ConnType::ENGINE_TO_AGGREGATOR:
         break;
     default:
         HLOG(ERROR) << "Invalid connection type: " << handshake.conn_type;
@@ -170,14 +170,14 @@ void MergerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake
         return;
     }
 
-    int conn_type_id = MergerBase::GetIngressConnTypeId(type, src_node_id);
+    int conn_type_id = AggregatorBase::GetIngressConnTypeId(type, src_node_id);
     auto connection = std::make_unique<IngressConnection>(
         conn_type_id, sockfd, sizeof(SharedLogMessage));
     connection->SetMessageFullSizeCallback(
         &IngressConnection::SharedLogMessageFullSizeCallback);
     connection->SetNewMessageCallback(
         IngressConnection::BuildNewSharedLogMessageCallback(
-            absl::bind_front(&MergerBase::OnRecvSharedLogMessage, this,
+            absl::bind_front(&AggregatorBase::OnRecvSharedLogMessage, this,
                              conn_type_id & kConnectionTypeMask, src_node_id)));
     RegisterConnection(PickIOWorkerForConnType(conn_type_id), connection.get());
     DCHECK_GE(connection->id(), 0);
@@ -185,7 +185,7 @@ void MergerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake
     ingress_conns_[connection->id()] = std::move(connection);
 }
 
-void MergerBase::OnConnectionClose(ConnectionBase* connection) {
+void AggregatorBase::OnConnectionClose(ConnectionBase* connection) {
     DCHECK(WithinMyEventLoopThread());
     switch (connection->type() & kConnectionTypeMask) {
     case kEngineIngressTypeId:
@@ -208,7 +208,7 @@ void MergerBase::OnConnectionClose(ConnectionBase* connection) {
     }
 }
 
-EgressHub* MergerBase::CreateEgressHub(protocol::ConnType conn_type,
+EgressHub* AggregatorBase::CreateEgressHub(protocol::ConnType conn_type,
                                         uint16_t dst_node_id,
                                         IOWorker* io_worker) {
     struct sockaddr_in addr;
@@ -236,12 +236,12 @@ EgressHub* MergerBase::CreateEgressHub(protocol::ConnType conn_type,
     return hub;
 }
 
-void MergerBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
+void AggregatorBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
     if (node_type != NodeType::kEngineNode) {
         return;
     }
     RemoveEngineNode(node_id);
-    int egress_hub_id = GetEgressHubTypeId(protocol::ConnType::MERGER_TO_ENGINE, node_id);
+    int egress_hub_id = GetEgressHubTypeId(protocol::ConnType::AGGREGATOR_TO_ENGINE, node_id);
     ForEachIOWorker([&] (IOWorker* io_worker) {
         EgressHub* egress_hub = io_worker->PickConnectionAs<EgressHub>(egress_hub_id);
         if(egress_hub != nullptr){

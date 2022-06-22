@@ -228,7 +228,7 @@ void StorageBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REPLICATE)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::SET_AUXDATA)
      || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_AT)
-     || (conn_type == kMergerIngressTypeId && op_type == SharedLogOpType::READ_AT)
+     || (conn_type == kAggregatorIngressTypeId && op_type == SharedLogOpType::READ_AT)
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
                      conn_type, message.op_type);
     MessageHandler(message, payload);
@@ -265,7 +265,7 @@ void StorageBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshak
         break;
     case protocol::ConnType::INDEX_TO_STORAGE:
         break;
-    case protocol::ConnType::MERGER_TO_STORAGE:
+    case protocol::ConnType::AGGREGATOR_TO_STORAGE:
         break;
     default:
         HLOG(ERROR) << "Invalid connection type: " << handshake.conn_type;
@@ -294,14 +294,14 @@ void StorageBase::OnConnectionClose(ConnectionBase* connection) {
     case kSequencerIngressTypeId:
     case kEngineIngressTypeId:
     case kIndexIngressTypeId:
-    case kMergerIngressTypeId:
+    case kAggregatorIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kSequencerEgressHubTypeId:
     case kEngineEgressHubTypeId:
     case kIndexEgressHubTypeId:
-    case kMergerEgressHubTypeId:
+    case kAggregatorEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));

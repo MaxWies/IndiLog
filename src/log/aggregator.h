@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log/merger_base.h"
+#include "log/aggregator_base.h"
 #include "log/aggregating.h"
 #include "log/log_space.h"
 #include "log/index.h"
@@ -9,10 +9,10 @@
 namespace faas {
 namespace log {
 
-class Merger final : public MergerBase {
+class Aggregator final : public AggregatorBase {
 public:
-    explicit Merger(uint16_t node_id);
-    ~Merger();
+    explicit Aggregator(uint16_t node_id);
+    ~Aggregator();
 
 private:
     std::string log_header_;
@@ -34,7 +34,7 @@ private:
 
 
     void HandleSlaveResult(const protocol::SharedLogMessage& message) override;
-    bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
+    bool AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result);
 
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
@@ -47,7 +47,7 @@ private:
 
     IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message);
 
-    DISALLOW_COPY_AND_ASSIGN(Merger);
+    DISALLOW_COPY_AND_ASSIGN(Aggregator);
 };
 
 }  // namespace log

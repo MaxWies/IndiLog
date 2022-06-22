@@ -123,8 +123,8 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     response.payload_size = 0;
     uint16_t master_node_id = result.original_query.master_node_id;
 
-    protocol::ConnType connection_type = protocol::ConnType::INDEX_TO_MERGER;
-    if (result.original_query.merge_type == protocol::kUseMasterSlave) {
+    protocol::ConnType connection_type = protocol::ConnType::INDEX_TO_AGGREGATOR;
+    if (result.original_query.aggregate_type == protocol::kUseMasterSlave) {
         connection_type = protocol::ConnType::INDEX_TO_INDEX;
     }
     bool success = SendSharedLogMessage(
@@ -286,8 +286,8 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
     case protocol::ConnType::STORAGE_TO_INDEX:
         HVLOG(1) << "ConnectionType: StorageToIndex";
         break;
-    case protocol::ConnType::INDEX_TO_MERGER:
-        HVLOG(1) << "ConnectionType: IndexToMerger";
+    case protocol::ConnType::INDEX_TO_AGGREGATOR:
+        HVLOG(1) << "ConnectionType: IndexToAggregator";
         break;
     case protocol::ConnType::INDEX_TO_INDEX:
         HVLOG(1) << "ConnectionType: IndexToIndex";
@@ -318,14 +318,14 @@ void IndexBase::OnConnectionClose(ConnectionBase* connection) {
     switch (connection->type() & kConnectionTypeMask) {
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
-    case kMergerIngressTypeId:
+    case kAggregatorIngressTypeId:
     case kIndexIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
-    case kMergerEgressHubTypeId:
+    case kAggregatorEgressHubTypeId:
     case kIndexEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);

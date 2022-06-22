@@ -88,7 +88,7 @@ void Engine::OnViewCreated(const View* view) {
                 bits::JoinTwo16(view->id(), sequencer_id), 
                 view->num_storage_nodes(),
                 view->num_index_nodes(),
-                view->num_merger_nodes()
+                view->num_aggregator_nodes()
             );
             // apply for shard
             std::string znode_path_shard_req = fmt::format("storage_shard_req/{}_{}_{}", view->id(), sequencer_id, my_node_id());
@@ -379,12 +379,12 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
     HVLOG(1) << "Send request to index tier";
     std::vector<uint16_t> index_nodes;
     storage_shard->PickIndexNodePerShard(index_nodes);
-    uint16_t master_index_node = storage_shard->PickMergerNode(index_nodes);
-    uint16_t merge_type = protocol::kUseAggregator;
+    uint16_t master_index_node = storage_shard->PickAggregatorNode(index_nodes);
+    uint16_t aggregate_type = protocol::kUseAggregator;
     if (storage_shard->UseMasterSlaveMerging()) {
-        merge_type = protocol::kUseMasterSlave;
+        aggregate_type = protocol::kUseMasterSlave;
     }
-    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node, merge_type);
+    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node, aggregate_type);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
     bool send_success = true;
@@ -837,8 +837,8 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             received_message.origin_node_id, current_view_->id(), received_message.view_id);
         return;
     }
-    if(result == protocol::SharedLogResultType::REGISTER_MERGER_FAILED){
-        HLOG_F(ERROR, "Registration at merger_node={} failed. registration_view={}, response_view={}", 
+    if(result == protocol::SharedLogResultType::REGISTER_AGGREGATOR_FAILED){
+        HLOG_F(ERROR, "Registration at aggregator_node={} failed. registration_view={}, response_view={}", 
             received_message.origin_node_id, current_view_->id(), received_message.view_id);
         return;
     }
@@ -876,11 +876,11 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
                     my_node_id(), index_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
                 SendRegistrationRequest(index_node_id, protocol::ConnType::ENGINE_TO_INDEX, &request);
             }
-            const View::NodeIdVec merger_node_ids = current_view_->GetMergerNodes();
-            for(uint16_t merger_node_id : merger_node_ids){
-                HVLOG_F(1, "Send registration request to merger node. engine_node={}, merger_node_id={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
-                    my_node_id(), merger_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
-                SendRegistrationRequest(merger_node_id, protocol::ConnType::ENGINE_TO_MERGER, &request);
+            const View::NodeIdVec aggregator_node_ids = current_view_->GetAggregatorNodes();
+            for(uint16_t aggregator_node_id : aggregator_node_ids){
+                HVLOG_F(1, "Send registration request to aggregator node. engine_node={}, aggregator_node_id={}, view_id={}, sequencer_id={}, storage_shard_id={}, local_start_id={}",
+                    my_node_id(), aggregator_node_id, current_view_->id(), received_message.sequencer_id, received_message.storage_shard_id, received_message.local_start_id);
+                SendRegistrationRequest(aggregator_node_id, protocol::ConnType::ENGINE_TO_AGGREGATOR, &request);
             }
         }
     }
@@ -888,7 +888,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         HLOG_F(INFO, "Registered at storage node. storage_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateStorageConnections(logspace_id, received_message.origin_node_id)){
-            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
+            HLOG(INFO) << "Registered at all storage, index and aggregator nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.storage_shard_id, received_message.engine_node_id,
@@ -901,7 +901,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         HLOG_F(INFO, "Registered at index node. index_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
         if(view_mutable_.UpdateIndexConnections(logspace_id, received_message.origin_node_id)){
-            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
+            HLOG(INFO) << "Registered at all storage, index and aggregator nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.storage_shard_id, received_message.engine_node_id,
@@ -910,11 +910,11 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             SendRegistrationRequest(received_message.sequencer_id, protocol::ConnType::ENGINE_TO_SEQUENCER, &request);
         }
     }
-    else if (result == protocol::SharedLogResultType::REGISTER_MERGER_OK) {
-        HLOG_F(INFO, "Registered at merger node. merger_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
+    else if (result == protocol::SharedLogResultType::REGISTER_AGGREGATOR_OK) {
+        HLOG_F(INFO, "Registered at aggregator node. aggregator_node={}, sequencer_id={}, storage_shard_id={}, engine_id={}", 
             received_message.origin_node_id, received_message.sequencer_id, received_message.storage_shard_id, received_message.engine_node_id);
-        if(view_mutable_.UpdateMergerConnections(logspace_id, received_message.origin_node_id)){
-            HLOG(INFO) << "Registered at all storage, index and merger nodes. Unblock shard at sequencer node";
+        if(view_mutable_.UpdateAggregatorConnections(logspace_id, received_message.origin_node_id)){
+            HLOG(INFO) << "Registered at all storage, index and aggregator nodes. Unblock shard at sequencer node";
             SharedLogMessage request = protocol::SharedLogMessageHelper::NewRegisterResponseMessage(
                 SharedLogResultType::REGISTER_UNBLOCK, current_view_->id(), received_message.sequencer_id, 
                 received_message.storage_shard_id, received_message.engine_node_id,
@@ -1214,10 +1214,10 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     return request;
 }
 
-SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t merger_node_id, uint16_t merge_type) {
+SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t aggregator_node_id, uint16_t aggregtor_type) {
     SharedLogMessage request = BuildReadRequestMessage(op);
-    request.merge_type = merge_type;
-    request.merger_node_id = merger_node_id;
+    request.aggregator_type = aggregtor_type;
+    request.aggregator_node_id = aggregator_node_id;
     return request;
 }
 

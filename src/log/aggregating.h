@@ -7,7 +7,7 @@ namespace faas {
 namespace log {
 
 struct IndexReadOp {
-    absl::flat_hash_set<uint16_t> merged_nodes;
+    absl::flat_hash_set<uint16_t> aggregated_nodes;
     IndexQueryResult index_query_result;
 };
 
@@ -17,7 +17,7 @@ class EngineIndexReadOp {
 public:
     EngineIndexReadOp();
     ~EngineIndexReadOp();
-    bool Merge(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
+    bool Aggregate(size_t num_index_shards, uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result);
 private:
     std::string log_header_;
     OngoingIndexReadsTable ongoing_index_reads_;

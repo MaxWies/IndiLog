@@ -226,8 +226,8 @@ std::string EgressHub::GetLogHeader(int type) {
         return fmt::format("StorageEgressHub[{}]: ", type - masked_type);
     case kIndexEgressHubTypeId:
         return fmt::format("IndexEgressHub[{}]: ", type - masked_type);
-    case kMergerEgressHubTypeId:
-        return fmt::format("MergerEgressHub[{}]: ", type - masked_type);
+    case kAggregatorEgressHubTypeId:
+        return fmt::format("AggregatorEgressHub[{}]: ", type - masked_type);
     default:
         return fmt::format("EgressHub[{}]: ", type);
     }

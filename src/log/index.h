@@ -25,7 +25,7 @@ struct IndexQuery {
     uint64_t metalog_progress;
 
     uint16_t master_node_id;
-    uint16_t merge_type;
+    uint16_t aggregate_type;
 
     IndexFoundResult prev_found_result;
 
