@@ -3,15 +3,11 @@
 #include "log/indexing_base.h"
 #include "log/log_space.h"
 #include "log/index.h"
+#include "log/aggregating.h"
 #include "log/utils.h"
 
 namespace faas {
 namespace log {
-
-struct IndexReadOp {
-    absl::flat_hash_set<uint16_t> merged_nodes;
-    IndexQueryResult index_query_result;
-};
 
 struct PerTagMinSeqnum {
     uint64_t seqnum;
@@ -38,6 +34,8 @@ private:
 
     log_utils::FutureRequests future_requests_;
 
+    absl::flat_hash_map</*engine_id*/uint16_t, std::unique_ptr<EngineIndexReadOp>> ongoing_engine_index_reads_ ABSL_GUARDED_BY(view_mu_);
+
     bool per_tag_seqnum_min_completion_;
     PerTagMinSeqnumTable per_tag_min_seqnum_table_;
 
@@ -57,6 +55,9 @@ private:
     void ProcessIndexQueryResults(const Index::QueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
+    void HandleSlaveResult(const protocol::SharedLogMessage& message) override;
+    bool MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result);
+
     void ProcessIndexResult(const IndexQueryResult& query_result);
     // void ProcessIndexMinResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
@@ -72,6 +73,7 @@ private:
 
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message, const uint16_t original_requester_id);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
+    IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message);
 
     // IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result);
 

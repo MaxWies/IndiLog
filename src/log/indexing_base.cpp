@@ -67,6 +67,9 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B)
      || (conn_type == kStorageIngressTypeId && op_type == SharedLogOpType::INDEX_DATA)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::READ_MIN)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_INDEX_RESULT)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_PREV_INDEX_RESULT)
+     || (conn_type == kIndexIngressTypeId && op_type == SharedLogOpType::READ_NEXT_B_INDEX_RESULT)
      || (conn_type == kEngineIngressTypeId && op_type == SharedLogOpType::REGISTER)
      || op_type == SharedLogOpType::RESPONSE
     ) << fmt::format("Invalid combination: conn_type={:#x}, op_type={:#x}",
@@ -84,6 +87,11 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
         break;
     case SharedLogOpType::INDEX_DATA:
         OnRecvNewIndexData(message, payload);
+        break;
+    case SharedLogOpType::READ_NEXT_INDEX_RESULT:
+    case SharedLogOpType::READ_PREV_INDEX_RESULT:
+    case SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
+        HandleSlaveResult(message);
         break;
     case SharedLogOpType::READ_MIN:
         HandleReadMinRequest(message);
@@ -114,8 +122,13 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
 
     response.payload_size = 0;
     uint16_t master_node_id = result.original_query.master_node_id;
+
+    protocol::ConnType connection_type = protocol::ConnType::INDEX_TO_MERGER;
+    if (result.original_query.merge_type == protocol::kUseMasterSlave) {
+        connection_type = protocol::ConnType::INDEX_TO_INDEX;
+    }
     bool success = SendSharedLogMessage(
-        protocol::ConnType::INDEX_TO_MERGER,
+        connection_type,
         master_node_id, response);
     if (!success) {
         HLOG_F(WARNING, "IndexRead: Failed to send index result to master index {}", master_node_id);
@@ -274,6 +287,9 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
         HVLOG(1) << "ConnectionType: StorageToIndex";
         break;
     case protocol::ConnType::INDEX_TO_MERGER:
+        HVLOG(1) << "ConnectionType: IndexToMerger";
+        break;
+    case protocol::ConnType::INDEX_TO_INDEX:
         HVLOG(1) << "ConnectionType: IndexToIndex";
         break;
     default:
@@ -303,12 +319,14 @@ void IndexBase::OnConnectionClose(ConnectionBase* connection) {
     case kEngineIngressTypeId:
     case kStorageIngressTypeId:
     case kMergerIngressTypeId:
+    case kIndexIngressTypeId:
         DCHECK(ingress_conns_.contains(connection->id()));
         ingress_conns_.erase(connection->id());
         break;
     case kEngineEgressHubTypeId:
     case kStorageEgressHubTypeId:
     case kMergerEgressHubTypeId:
+    case kIndexEgressHubTypeId:
         {
             absl::MutexLock lk(&conn_mu_);
             DCHECK(egress_hubs_.contains(connection->id()));

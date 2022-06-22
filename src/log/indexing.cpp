@@ -137,7 +137,8 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     DCHECK(  op_type == SharedLogOpType::READ_NEXT
           || op_type == SharedLogOpType::READ_PREV
           || op_type == SharedLogOpType::READ_NEXT_B);
-    DCHECK_EQ(request.use_master_node_id, protocol::kUseMasterNodeId);
+    DCHECK(  request.merge_type == protocol::kUseMasterSlave 
+          || request.merge_type == protocol::kUseAggregator);
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -280,6 +281,12 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
     if(!view_mutable_.PutCurrentEngineNodeId(received_message.sequencer_id, received_message.engine_node_id)){
         HLOG_F(WARNING, "Engine with id={} already registered", received_message.engine_node_id);
     }
+    if(ongoing_engine_index_reads_.contains(received_message.engine_node_id)){
+        HLOG_F(WARNING, "Remove index read operations of engine with id={}", received_message.engine_node_id);
+        ongoing_engine_index_reads_.erase(received_message.engine_node_id);
+    }
+    EngineIndexReadOp* engine_index_read_ops = new EngineIndexReadOp();
+    ongoing_engine_index_reads_[received_message.engine_node_id].reset(engine_index_read_ops);
     HLOG_F(INFO, "Registration ok. engine_id={}", received_message.engine_node_id);
     SharedLogMessage response = SharedLogMessageHelper::NewRegisterResponseMessage(
             SharedLogResultType::REGISTER_INDEX_OK,
@@ -295,6 +302,9 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
 void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
     absl::MutexLock view_lk(&view_mu_);
     view_mutable_.RemoveCurrentEngineNodeId(engine_node_id);
+    if (ongoing_engine_index_reads_.contains(engine_node_id)){
+        ongoing_engine_index_reads_.erase(engine_node_id);
+    }
 }
 
 #undef ONHOLD_IF_FROM_FUTURE_VIEW
@@ -303,45 +313,55 @@ void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
 
 void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     if (my_query_result.IsPointHit()){
-        HVLOG_F(1, "IndexRead: Point hit. Forward read request for query_seqnum={}", bits::HexStr0x(my_query_result.original_query.query_seqnum));
         ForwardReadRequest(my_query_result);
     }
-    HVLOG_F(1, "IndexRead: I am slave. Will send to master node {}", my_node_id(), my_query_result.original_query.master_node_id);
-    SendMasterIndexResult(my_query_result);
+    if (my_query_result.original_query.master_node_id != my_node_id()){
+        SendMasterIndexResult(my_query_result);
+        return;
+    } 
+    IndexQueryResult merged_index_query_result;
+    bool merge_complete = MergeIndexResult(my_node_id(), my_query_result, &merged_index_query_result);
+    if (merge_complete && merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()) {
+        ForwardReadRequest(merged_index_query_result);
+    } else if (merge_complete && !merged_index_query_result.IsFound()){
+        SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+    }
 }
 
-// outdated
-// void IndexNode::ProcessIndexMinResult(const IndexQueryResult& query_result) {
-//     if (query_result.original_query.min_seqnum_query){
-//         if (query_result.found_result.seqnum == kInvalidLogSeqNum) {
-//             // broadcast new tag
-//             uint32_t logspace_id;
-//             std::vector<uint16_t> engine_ids;
-//             {
-//                 absl::ReaderMutexLock view_lk(&view_mu_);
-//                 logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
-//                 uint16_t seqnum_id = bits::LowHalf32(logspace_id);
-//                 for (uint16_t engine_node_id : view_mutable_.GetCurrentEngineNodeIds(seqnum_id)){
-//                     engine_ids.push_back(engine_node_id);
-//                 }
-//             }
-//             HVLOG_F(1, "Tag={} is new. Broadcast to {} nodes on compute tier", query_result.original_query.user_tag, engine_ids.size());
-//             BroadcastIndexReadResponse(query_result, engine_ids, logspace_id);
-//         } else {
-//             // send response to engine node
-//             HVLOG_F(1, "Tag={} exists with min_seqnum={}. Send to engine_node={}", 
-//                 query_result.original_query.user_tag, bits::HexStr0x(query_result.found_result.seqnum), query_result.original_query.origin_node_id
-//             );
-//             uint32_t logspace_id;
-//             {
-//                 absl::ReaderMutexLock view_lk(&view_mu_);
-//                 logspace_id = current_view_->LogSpaceIdentifier(query_result.original_query.user_logspace);
-//             }
-//             SendIndexReadResponse(query_result, logspace_id);
-//         }
-//         return;
-//     }
-// }
+bool IndexNode::MergeIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* merged_index_query_result){
+    HVLOG_F(1, "IndexRead: Index result received. index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
+        index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
+        bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
+    );
+    EngineIndexReadOp* engine_index_read_op = nullptr;
+    size_t num_index_shards; 
+    {
+        absl::ReaderMutexLock view_lk(&view_mu_);
+        num_index_shards = current_view_->num_index_shards();
+        engine_index_read_op = ongoing_engine_index_reads_.at(index_query_result_other.original_query.origin_node_id).get();
+    }
+    if (engine_index_read_op == nullptr) {
+        HLOG_F(ERROR, "No operations entry for engine_node={}", index_query_result_other.original_query.origin_node_id);
+        return false;
+    }
+    return engine_index_read_op->Merge(num_index_shards, index_node_id_other, index_query_result_other, merged_index_query_result);
+}
+
+void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
+    DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_INDEX_RESULT || 
+           SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_PREV_INDEX_RESULT ||
+           SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_B_INDEX_RESULT);
+    IndexQueryResult slave_index_query_result = BuildIndexResult(message);
+    IndexQueryResult merged_index_query_result;
+    bool merge_complete = MergeIndexResult(message.origin_node_id, slave_index_query_result, &merged_index_query_result);
+    if (merge_complete){
+        if (merged_index_query_result.IsFound() && !merged_index_query_result.IsPointHit()){
+            ForwardReadRequest(merged_index_query_result);
+        } else if (!merged_index_query_result.IsFound()){
+            SendIndexReadFailureResponse(merged_index_query_result.original_query, protocol::SharedLogResultType::EMPTY);
+        }
+    }
+}
 
 void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                         Index::QueryResultVec* more_results) {
@@ -458,15 +478,16 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
         .user_tag = message.query_tag,
         .query_seqnum = message.query_seqnum,
         .metalog_progress = message.user_metalog_progress,
-        .master_node_id = message.master_node_id,
+        .master_node_id = message.merger_node_id,
         .prev_found_result = IndexFoundResult {
             .view_id = message.prev_view_id,
             .storage_shard_id = message.prev_shard_id,
             .seqnum = message.prev_found_seqnum
         },
     };
-    if(message.use_master_node_id == protocol::kUseMasterNodeId){
-        index_query.master_node_id = message.master_node_id;
+    if(message.merge_type == protocol::kUseAggregator || message.merge_type == protocol::kUseMasterSlave){
+        index_query.master_node_id = message.merger_node_id;
+        index_query.merge_type = message.merge_type;
         index_query.prev_found_result = IndexFoundResult {
             .view_id = 0,
             .storage_shard_id = 0,
@@ -491,47 +512,32 @@ IndexQuery IndexNode::BuildIndexQuery(const IndexQueryResult& result) {
     return query;
 }
 
-// void IndexNode::BackgroundThreadMain() {
-//     int timerfd = io_utils::CreateTimerFd();
-//     CHECK(timerfd != -1) << "Failed to create timerfd";
-//     io_utils::FdUnsetNonblocking(timerfd);
-//     absl::Duration interval = absl::Milliseconds(
-//         absl::GetFlag(FLAGS_slog_index_bgthread_interval_ms));
-//     CHECK(io_utils::SetupTimerFdPeriodic(timerfd, absl::Milliseconds(100), interval))
-//         << "Failed to setup timerfd with interval " << interval;
-//     bool running = true;
-//     while (running) {
-//         uint64_t exp;
-//         ssize_t nread = read(timerfd, &exp, sizeof(uint64_t));
-//         if (nread < 0) {
-//             PLOG(FATAL) << "Failed to read on timerfd";
-//         }
-//         CHECK_EQ(gsl::narrow_cast<size_t>(nread), sizeof(uint64_t));
-//         // TODO: flushing on index tier
-//         // FlushLogEntries();
-//         // TODO: cleanup outdated LogSpace
-//         running = state_.load(std::memory_order_acquire) != kStopping;
-//     }
-// }
+IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message){
+    SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
+    return IndexQueryResult {
+        .state = message.found_seqnum == kInvalidLogSeqNum ? 
+            IndexQueryResult::State::kEmpty : IndexQueryResult::State::kFound,
+        .metalog_progress = message.user_metalog_progress,
+        .original_query = IndexQuery {
+            .direction = IndexQuery::DirectionFromOpType(op_type),
+            .origin_node_id = message.engine_node_id,
+            .hop_times = message.hop_times,
+            .client_data = message.client_data,
+            .user_logspace = message.user_logspace,
+            .query_seqnum = message.query_seqnum,
+            .metalog_progress = message.user_metalog_progress
+        },
+        .found_result = IndexFoundResult {
+            .view_id = message.found_view_id,
+            .storage_shard_id = message.found_storage_shard_id,
+            .seqnum = message.found_seqnum
+        }
+    };
+}
 
 void IndexNode::FlushIndexEntries() {
     // TODO: flushing
 }
-
-// IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result){
-//     IndexQuery query = BuildIndexQuery(message, gsl::narrow_cast<uint16_t>(result.original_requester_id()));
-//     return IndexQueryResult {
-//         .state = result.found() ? IndexQueryResult::State::kFound : IndexQueryResult::State::kEmpty,
-//         .metalog_progress = query.metalog_progress,
-//         .next_view_id = 0,
-//         .original_query = query,
-//         .found_result = IndexFoundResult {
-//             .view_id = gsl::narrow_cast<uint16_t>(result.view_id()),
-//             .storage_shard_id = gsl::narrow_cast<uint16_t>(result.storage_shard_id()),
-//             .seqnum = result.seqnum()
-//         }
-//     };
-// }
 
 }  // namespace log
 }  // namespace faas

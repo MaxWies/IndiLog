@@ -10,7 +10,7 @@ ABSL_FLAG(size_t, metalog_replicas, 3, "Replicas for meta logs");
 ABSL_FLAG(size_t, userlog_replicas, 3, "Replicas for users' logs");
 ABSL_FLAG(size_t, index_replicas, 3, "Replicas for log index");
 ABSL_FLAG(size_t, index_shards, 1, "Index shards");
-ABSL_FLAG(size_t, merger_replicas, 1, "Replicas for merger");
+ABSL_FLAG(size_t, merger_replicas, 0, "Replicas for merger. 0 is master slave architecture");
 ABSL_FLAG(size_t, num_phylogs, 1, "Number of physical logs");
 ABSL_FLAG(size_t, max_num_storage_shards, 4, "Max number of storage shards of a physcial log");
 

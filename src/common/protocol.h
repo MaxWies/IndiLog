@@ -141,7 +141,8 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
-constexpr uint64_t kUseMasterNodeId   = std::numeric_limits<uint16_t>::max();
+constexpr uint64_t kUseAggregator     = std::numeric_limits<uint16_t>::max();
+constexpr uint64_t kUseMasterSlave    = std::numeric_limits<uint16_t>::max()-1;
 
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
@@ -209,10 +210,11 @@ enum class ConnType : uint16_t {
     INDEX_TO_ENGINE        = 11,  // Index response
     STORAGE_TO_INDEX       = 12,  // Index update
     INDEX_TO_STORAGE       = 13,  // Forward read request
-    INDEX_TO_MERGER        = 14,  // Master slave indexing
+    INDEX_TO_MERGER        = 14,  // Aggregation indexing
     MERGER_TO_STORAGE      = 15,  // Forward read request
     MERGER_TO_ENGINE       = 16,  // Index fail response
     ENGINE_TO_MERGER       = 17,  // Registration
+    INDEX_TO_INDEX         = 18,  // Master slave indexing
 };
 
 struct HandshakeMessage {
@@ -289,8 +291,8 @@ struct SharedLogMessage {
             uint16_t found_view_id; // (used by MERGING)
         } __attribute__ ((packed));
         struct {
-            uint16_t use_master_node_id;
-            uint16_t master_node_id; // (only used for index tier)
+            uint16_t merge_type;
+            uint16_t merger_node_id; // (only used for index tier)
         } __attribute__ ((packed));
         uint32_t local_start_id;   // (only used by REGISTRATION)
     };

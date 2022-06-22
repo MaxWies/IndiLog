@@ -131,9 +131,16 @@ public:
             return index_nodes.at(static_cast<size_t>(std::rand()) % index_nodes.size());
         }
 
-        uint16_t PickMergerNode() const {
+        uint16_t PickMergerNode(const std::vector<uint16_t>& sharded_index_nodes) const {
+            if (merger_nodes_.empty()) {
+                return sharded_index_nodes.at(static_cast<size_t>(std::rand()) % sharded_index_nodes.size());
+            }
             size_t idx = __atomic_fetch_add(&next_merger_node_, 1, __ATOMIC_RELAXED);
             return merger_nodes_.at(idx % merger_nodes_.size());
+        }
+
+        bool UseMasterSlaveMerging() const {
+            return merger_nodes_.empty();
         }
 
         void PickIndexNodePerShard(std::vector<uint16_t>& sharded_index_nodes) const {

@@ -33,6 +33,7 @@ protected:
     virtual void HandleReadMinRequest(const protocol::SharedLogMessage& request) = 0;
     virtual void OnRecvNewIndexData(const protocol::SharedLogMessage& message,
                                         std::span<const char> payload) = 0;
+    virtual void HandleSlaveResult(const protocol::SharedLogMessage& message) = 0;
     virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
     virtual void RemoveEngineNode(uint16_t engine_node_id) = 0;
 

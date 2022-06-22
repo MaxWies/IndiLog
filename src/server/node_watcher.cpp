@@ -140,6 +140,7 @@ const absl::flat_hash_map<ConnType, NodeTypePair> kNodeTypeTable {
     { ConnType::ENGINE_TO_MERGER,       NODE_PAIR(Engine, Merger) },
     { ConnType::MERGER_TO_ENGINE,       NODE_PAIR(Merger, Engine) },
     { ConnType::MERGER_TO_STORAGE,      NODE_PAIR(Merger, Storage) },
+    { ConnType::INDEX_TO_INDEX,         NODE_PAIR(Index, Index) },
 };
 
 #undef NODE_PAIR

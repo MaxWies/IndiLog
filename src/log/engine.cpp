@@ -379,8 +379,12 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
     HVLOG(1) << "Send request to index tier";
     std::vector<uint16_t> index_nodes;
     storage_shard->PickIndexNodePerShard(index_nodes);
-    uint16_t master_index_node = storage_shard->PickMergerNode();
-    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node);
+    uint16_t master_index_node = storage_shard->PickMergerNode(index_nodes);
+    uint16_t merge_type = protocol::kUseAggregator;
+    if (storage_shard->UseMasterSlaveMerging()) {
+        merge_type = protocol::kUseMasterSlave;
+    }
+    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node, merge_type);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
     bool send_success = true;
@@ -1210,10 +1214,10 @@ SharedLogMessage Engine::BuildReadRequestMessage(LocalOp* op) {
     return request;
 }
 
-SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t master_node_id) {
+SharedLogMessage Engine::BuildIndexTierReadRequestMessage(LocalOp* op, uint16_t merger_node_id, uint16_t merge_type) {
     SharedLogMessage request = BuildReadRequestMessage(op);
-    request.use_master_node_id = protocol::kUseMasterNodeId;
-    request.master_node_id = master_node_id;
+    request.merge_type = merge_type;
+    request.merger_node_id = merger_node_id;
     return request;
 }
 
