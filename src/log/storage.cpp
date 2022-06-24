@@ -323,6 +323,7 @@ void Storage::ProcessReadFromDB(const SharedLogMessage& request) {
     DCHECK_EQ(response.logspace_id, request.logspace_id);
     DCHECK_EQ(response.seqnum_lowhalf, request.seqnum_lowhalf);
     response.user_metalog_progress = request.user_metalog_progress;
+    response.storage_shard_id = request.storage_shard_id;
     std::span<const char> user_tags_data(
         reinterpret_cast<const char*>(log_entry.user_tags().data()),
         static_cast<size_t>(log_entry.user_tags().size()) * sizeof(uint64_t));

@@ -301,8 +301,8 @@ struct SharedLogMessage {
         struct {
             uint16_t num_tags;          // [24:26]
             uint16_t aux_data_size;     // [26:28]
-            uint16_t storage_shard_id;  // [28:30] (only used by REGISTRATION | STORAGE_READ feedback)
-            uint16_t engine_node_id;    // [26:28] (used by REGISTRATION | AGGREGATING)
+            uint16_t storage_shard_id;  // [28:30] (used by REGISTRATION | STORAGE_READ feedback)
+            uint16_t engine_node_id;    // [30:32] (used by REGISTRATION | AGGREGATING)
         } __attribute__ ((packed));
     };
 

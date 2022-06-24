@@ -53,7 +53,7 @@ void SeqnumCache::Aggregate(size_t* num_seqnums, size_t* size){
 IndexQueryResult SeqnumCache::MakeQuery(const IndexQuery& query){
     uint16_t storage_shard_id;
     if(Get(query.query_seqnum, &storage_shard_id)){
-        HVLOG_F(1, "Cache hit: Found storage shard id for seqnum={}", bits::HexStr0x(query.query_seqnum));
+        HVLOG_F(1, "Cache hit: Found storage shard id {} for seqnum={}", storage_shard_id, bits::HexStr0x(query.query_seqnum));
         return BuildFoundResult(query, query.query_seqnum, storage_shard_id);
     } else {
         HVLOG_F(1, "seqnum={} not in cache", bits::HexStr0x(query.query_seqnum));
