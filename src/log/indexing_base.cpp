@@ -164,12 +164,13 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
     response.origin_node_id = my_node_id();
 
     response.hop_times = original_request.hop_times + 1;
+    response.logspace_id = original_request.logspace_id;
     response.client_data = original_request.client_data;
     response.user_logspace = original_request.user_logspace;
     response.query_tag = original_request.query_tag;
     response.seqnum_timestamp = original_request.seqnum_timestamp; // timestamp
 
-    response.complete_seqnum = seqnum;
+    response.min_seqnum = seqnum;
     response.found_storage_shard_id = storage_shard_id;
 
     uint16_t engine_destination = original_request.origin_node_id;

@@ -806,7 +806,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             absl::MutexLock min_tag_lk(&min_tag_mu_);
             pending_min_tags_.push_back(PendingMinTag{
                 message.query_tag,
-                message.complete_seqnum,
+                message.min_seqnum,
                 message.found_storage_shard_id,
                 message.user_logspace,
                 message.seqnum_timestamp

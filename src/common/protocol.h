@@ -287,8 +287,8 @@ struct SharedLogMessage {
             uint16_t prev_shard_id;
         } __attribute__ ((packed));
         struct {
-            uint16_t found_storage_shard_id; // (used by MIN SEQNUM RESPONSE and MERGING)
-            uint16_t found_view_id; // (used by MERGING)
+            uint16_t found_storage_shard_id; // (used by MIN SEQNUM RESPONSE and AGGREGATING)
+            uint16_t found_view_id; // (used by AGGREGATING)
         } __attribute__ ((packed));
         struct {
             uint16_t aggregator_type;
@@ -302,7 +302,7 @@ struct SharedLogMessage {
             uint16_t num_tags;          // [24:26]
             uint16_t aux_data_size;     // [26:28]
             uint16_t storage_shard_id;  // [28:30] (only used by REGISTRATION | STORAGE_READ feedback)
-            uint16_t engine_node_id;    // [26:28] (used by REGISTRATION | MERGING)
+            uint16_t engine_node_id;    // [26:28] (used by REGISTRATION | AGGREGATING)
         } __attribute__ ((packed));
     };
 
@@ -312,14 +312,14 @@ struct SharedLogMessage {
         uint64_t localid;           // [40:48]
         uint64_t query_seqnum;      // [40:48]
         uint64_t trim_seqnum;       // [40:48]
-        uint64_t complete_seqnum;   // [40:48] (only used by MIN SEQNUM RESPONSE) //todo change to min seqnum
+        uint64_t min_seqnum;   // [40:48] (only used by MIN SEQNUM RESPONSE) //todo change to min seqnum
     };
     uint64_t client_data;       // [48:56]
 
     union {
         uint64_t prev_found_seqnum; // [56:64]
         uint64_t seqnum_timestamp;  // [56:64] (only used by Index Tier MIN requests)
-        uint64_t found_seqnum; // [56:64] (only used by MERGING)
+        uint64_t found_seqnum; // [56:64] (only used by AGGREGATING)
     };
 
 } __attribute__ (( packed, aligned(__FAAS_CACHE_LINE_SIZE) ));
