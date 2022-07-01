@@ -60,6 +60,7 @@ bool EngineIndexReadOp::Aggregate(size_t num_index_shards, uint16_t index_node_i
     }
     if(accessor->second->aggregated_nodes.size() == num_index_shards){
         *aggregated_index_query_result = accessor->second->index_query_result;
+        delete accessor->second;
         accessor.release();
         ongoing_index_reads_.erase(key);
         return true;

@@ -51,11 +51,7 @@ private:
     absl::flat_hash_map</* id */ int, std::unique_ptr<server::EgressHub>>
         egress_hubs_ ABSL_GUARDED_BY(conn_mu_);
 
-    //std::optional<LRUCache> log_cache_;
-
     void SetupZKWatchers();
-    void SetupTimers();
-
 
     void OnConnectionClose(server::ConnectionBase* connection) override;
     void OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,

@@ -44,7 +44,7 @@ void Aggregator::OnViewCreated(const View* view) {
             current_view_active_ = true;
         }
         views_.push_back(view);
-        log_header_ = fmt::format("Index[{}-{}]: ", my_node_id(), view->id());
+        log_header_ = fmt::format("Aggregator[{}-{}]: ", my_node_id(), view->id());
     }
     if (!ready_requests.empty()) {
         HLOG_F(INFO, "{} requests for the new view", ready_requests.size());

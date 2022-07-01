@@ -29,7 +29,6 @@ AggregatorBase::~AggregatorBase() {}
 
 void AggregatorBase::StartInternal() {
     SetupZKWatchers();
-    SetupTimers();
 }
 
 void AggregatorBase::StopInternal() {}
@@ -38,11 +37,6 @@ void AggregatorBase::SetupZKWatchers() {
     view_watcher_.SetViewCreatedCallback(
         [this] (const View* view) {
             this->OnViewCreated(view);
-            for (uint16_t sequencer_id : view->GetSequencerNodes()) {
-                if (view->is_active_phylog(sequencer_id)) {
-                    // TODO
-                }
-            }
         }
     );
     view_watcher_.SetViewFinalizedCallback(
@@ -51,10 +45,6 @@ void AggregatorBase::SetupZKWatchers() {
         }
     );
     view_watcher_.StartWatching(zk_session());
-}
-
-void AggregatorBase::SetupTimers() {
-    
 }
 
 void AggregatorBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
