@@ -1,7 +1,6 @@
 #include "log/indexing.h"
 
 #include "log/flags.h"
-#include "log/utils.h"
 #include "utils/bits.h"
 #include "utils/io.h"
 #include "utils/timerfd.h"

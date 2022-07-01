@@ -1,7 +1,6 @@
 #pragma once
 
-#include "log/common.h"
-#include "log/index.h"
+#include "log/index_dto.h"
 
 // Forward declarations
 namespace tkrzw { class CacheDBM; }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log/index.h"
+#include "log/index_dto.h"
 
 namespace faas {
 namespace log {

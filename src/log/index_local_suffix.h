@@ -1,7 +1,7 @@
 #pragma once
 
 #include "log/log_space_base.h"
-#include "log/index.h"
+#include "log/index_dto.h"
 
 namespace faas {
 namespace log {

@@ -5,79 +5,6 @@
 namespace faas {
 namespace log {
 
-IndexQuery::ReadDirection IndexQuery::DirectionFromOpType(protocol::SharedLogOpType op_type) {
-    switch (op_type) {
-    case protocol::SharedLogOpType::READ_NEXT:
-    case protocol::SharedLogOpType::READ_NEXT_INDEX_RESULT:
-        return IndexQuery::kReadNext;
-    case protocol::SharedLogOpType::READ_PREV:
-    case protocol::SharedLogOpType::READ_PREV_INDEX_RESULT:
-        return IndexQuery::kReadPrev;
-    case protocol::SharedLogOpType::READ_NEXT_B:
-    case protocol::SharedLogOpType::READ_NEXT_B_INDEX_RESULT:
-        return IndexQuery::kReadNextB;
-    case protocol::SharedLogOpType::READ_MIN:
-        return IndexQuery::kReadNext;
-    default:
-        UNREACHABLE();
-    }
-}
-
-protocol::SharedLogOpType IndexQuery::DirectionToOpType() const {
-    switch (direction) {
-    case IndexQuery::kReadNext:
-        return protocol::SharedLogOpType::READ_NEXT;
-    case IndexQuery::kReadPrev:
-        return protocol::SharedLogOpType::READ_PREV;
-    case IndexQuery::kReadNextB:
-        return protocol::SharedLogOpType::READ_NEXT_B;
-    default:
-        UNREACHABLE();
-    }
-}
-
-protocol::SharedLogOpType IndexQuery::DirectionToIndexResult() const {
-    switch (direction) {
-    case IndexQuery::kReadNext:
-        return protocol::SharedLogOpType::READ_NEXT_INDEX_RESULT;
-    case IndexQuery::kReadPrev:
-        return protocol::SharedLogOpType::READ_PREV_INDEX_RESULT;
-    case IndexQuery::kReadNextB:
-        return protocol::SharedLogOpType::READ_NEXT_B_INDEX_RESULT;
-    default:
-        UNREACHABLE();
-    }
-}
-
-std::string IndexQuery::DirectionToString() const {
-    switch (direction) {
-    case IndexQuery::kReadNext:
-        return "next";
-    case IndexQuery::kReadPrev:
-        return "prev";
-    case IndexQuery::kReadNextB:
-        return "nextB";
-    default:
-        UNREACHABLE();
-    }
-}
-
-uint32_t IndexQueryResult::StorageShardId() const {
-    DCHECK_EQ(state, State::kFound);
-    return bits::JoinTwo16(bits::LowHalf32(bits::HighHalf64(found_result.seqnum)), found_result.storage_shard_id);
-}
-
-bool IndexQueryResult::IsFound() const {
-    return state == State::kFound;
-}
-
-bool IndexQueryResult::IsPointHit() const {
-    if (state != State::kFound){
-        return false;
-    }
-    return original_query.query_seqnum == found_result.seqnum;
-}
-
 Index::Index(const View* view, uint16_t sequencer_id)
     : LogSpaceBase(LogSpaceBase::kFullMode, view, sequencer_id),
       indexed_metalog_position_(0),
@@ -549,7 +476,7 @@ bool Index::TryCompleteIndexUpdates(uint32_t* end_seqnum_position, size_t num_in
         return false;
     }
     if (entry.first == entry.second.size()){
-        // updates from all active storage shards received -> jump to next metalog base on shard amount
+        // updates from all active storage shards received -> jump to next metalog based on number of shards
         indexed_metalog_position_ = indexed_metalog_position_ + uint32_t(num_index_shards);
         *end_seqnum_position = end_seqnum_positions_.at(next_index_metalog_position);
         storage_shards_index_updates_.erase(next_index_metalog_position);

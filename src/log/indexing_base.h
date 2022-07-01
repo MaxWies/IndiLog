@@ -5,7 +5,7 @@
 #include "log/view_watcher.h"
 #include "log/db.h"
 #include "log/cache.h"
-#include "log/index.h"
+#include "log/index_dto.h"
 #include "server/server_base.h"
 #include "server/ingress_connection.h"
 #include "server/egress_hub.h"
