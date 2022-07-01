@@ -16,7 +16,7 @@ using protocol::SharedLogResultType;
 
 IndexNode::IndexNode(uint16_t node_id)
     : IndexBase(node_id),
-      log_header_(fmt::format("Index[{}-N]: ", node_id)),
+      log_header_(fmt::format("IndexNode[{}-N]: ", node_id)),
       current_view_(nullptr),
       current_view_active_(false),
       per_tag_seqnum_min_completion_(absl::GetFlag(FLAGS_slog_activate_min_seqnum_completion)) {}
@@ -34,7 +34,6 @@ void IndexNode::OnViewCreated(const View* view) {
     {
         absl::MutexLock view_lk(&view_mu_);
         if (contains_myself) {
-            //const View::Index* index_node = view->GetIndexNode(my_node_id());
             for (uint16_t sequencer_id : view->GetSequencerNodes()) {
                 if (!view->is_active_phylog(sequencer_id)) {
                     continue;
@@ -62,17 +61,6 @@ void IndexNode::OnViewCreated(const View* view) {
         );
     }
 }
-
-// void IndexNode::OnViewFrozen(const View* view) {
-//     DCHECK(zk_session()->WithinMyEventLoopThread());
-//     HLOG_F(INFO, "View {} frozen", view->id());
-//     absl::MutexLock view_lk(&view_mu_);
-//     DCHECK_EQ(view->id(), current_view_->id());
-//     if (view->contains_engine_node(my_node_id())) {
-//         DCHECK(current_view_active_);
-//         current_view_active_ = false;
-//     }
-// }
 
 void IndexNode::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
@@ -180,7 +168,6 @@ void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
             HVLOG_F(1, "Tag={} is not new", request.query_tag);
             found_seqnum = accessor->second.seqnum;
             found_storage_shard_id = accessor->second.storage_shard_id;
-            // TODO: broadcast alternative?
         }
     }
     SendIndexMinReadResponse(request, found_seqnum, found_storage_shard_id);
@@ -369,7 +356,6 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     HVLOG_F(1, "IndexRead: Process IndexContinueResult: next_view_id={}",
             query_result.next_view_id);
     const IndexQuery& query = query_result.original_query;
-    //const View::Sequencer* sequencer_node = nullptr;
     LockablePtr<Index> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
@@ -380,10 +366,6 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         const View* view = views_.at(view_id);
         uint32_t logspace_id = view->LogSpaceIdentifier(query.user_logspace);
         // TODO: index node has index for all sequencers?
-        // sequencer_node = view->GetSequencerNode(bits::LowHalf32(logspace_id));
-        // if (sequencer_node->IsIndexEngineNode(my_node_id())) {
-        //     index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
-        // }
         index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
     }
     if (index_ptr != nullptr) {
@@ -392,7 +374,6 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         locked_index->MakeQuery(query);
         locked_index->PollQueryResults(more_results);
     } else {
-        //uint32_t logspace_id = view->LogSpaceIdentifier(query.user_logspace);
         HLOG(ERROR) << "IndexRead: No index for logspace";
     }
 }
@@ -536,7 +517,7 @@ IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message)
 }
 
 void IndexNode::FlushIndexEntries() {
-    // TODO: flushing
+    //TODO: persist index data
 }
 
 }  // namespace log

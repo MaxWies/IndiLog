@@ -29,7 +29,6 @@ IndexBase::~IndexBase() {}
 
 void IndexBase::StartInternal() {
     SetupZKWatchers();
-    SetupTimers();
 }
 
 void IndexBase::StopInternal() {}
@@ -51,10 +50,6 @@ void IndexBase::SetupZKWatchers() {
         }
     );
     view_watcher_.StartWatching(zk_session());
-}
-
-void IndexBase::SetupTimers() {
-    
 }
 
 void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
@@ -135,30 +130,6 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     }
 }
 
-void IndexBase::SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id) {
-    // protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
-    // SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
-    // response.origin_node_id = my_node_id();
-    // response.hop_times = result.original_query.hop_times + 1;
-    // response.client_data = result.original_query.client_data;
-    // response.logspace_id = logspace_id;
-    // response.user_logspace = result.original_query.user_logspace;
-    // response.query_tag = result.original_query.user_tag;
-    // response.query_seqnum = result.original_query.query_seqnum;
-    // response.prev_view_id = result.original_query.prev_found_result.view_id;
-    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    // std::string payload = SerializedIndexResult(result);
-    // response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
-    // uint16_t engine_id = result.original_query.origin_node_id;
-    // bool success = SendSharedLogMessage(
-    //     protocol::ConnType::INDEX_TO_ENGINE,
-    //     engine_id, response, payload);
-    // if (!success) {
-    //     HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_id);
-    // }
-}
-
 void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id){
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(protocol::SharedLogResultType::INDEX_MIN_OK);
     response.origin_node_id = my_node_id();
@@ -168,7 +139,7 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
     response.client_data = original_request.client_data;
     response.user_logspace = original_request.user_logspace;
     response.query_tag = original_request.query_tag;
-    response.seqnum_timestamp = original_request.seqnum_timestamp; // timestamp
+    response.seqnum_timestamp = original_request.seqnum_timestamp;
 
     response.min_seqnum = seqnum;
     response.found_storage_shard_id = storage_shard_id;
@@ -180,33 +151,6 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
     if (!success) {
         HLOG_F(WARNING, "IndexRead: Failed to send index read response to engine {}", engine_destination);
     }
-}
-
-void IndexBase::BroadcastIndexReadResponse(const IndexQueryResult& result, const std::vector<uint16_t>& engine_ids, uint32_t logspace_id) {
-    // protocol::SharedLogResultType result_type = protocol::SharedLogResultType::INDEX_OK;
-    // SharedLogMessage response = SharedLogMessageHelper::NewResponse(result_type);
-    // response.origin_node_id = my_node_id();
-    // response.hop_times = result.original_query.hop_times + 1;
-    // response.client_data = result.original_query.client_data;
-    // response.logspace_id = logspace_id;
-    // response.user_logspace = result.original_query.user_logspace;
-    // response.query_tag = result.original_query.user_tag;
-    // response.query_seqnum = result.original_query.query_seqnum;
-    // response.prev_view_id = result.original_query.prev_found_result.view_id;
-    // response.prev_shard_id = result.original_query.prev_found_result.storage_shard_id;
-    // response.prev_found_seqnum = result.original_query.prev_found_result.seqnum;
-    // std::string payload = SerializedIndexResult(result);
-    // response.payload_size = gsl::narrow_cast<uint32_t>(payload.size());
-    // bool success = true;
-    // for (uint16_t engine_id : engine_ids){
-    //     success &= SendSharedLogMessage(
-    //         protocol::ConnType::INDEX_TO_ENGINE,
-    //         engine_id, response, payload
-    //     );
-    // }
-    // if (!success) {
-    //     HLOG(WARNING) << "IndexRead: Failed to send index read response to all engines";
-    // }
 }
 
 void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {

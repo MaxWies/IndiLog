@@ -25,12 +25,12 @@ private:
     std::string log_header_;
 
     absl::Mutex view_mu_;
-    const View* current_view_      ABSL_GUARDED_BY(view_mu_);
-    ViewMutable view_mutable_      ABSL_GUARDED_BY(view_mu_);
+    const View* current_view_        ABSL_GUARDED_BY(view_mu_);
+    ViewMutable view_mutable_        ABSL_GUARDED_BY(view_mu_);
     bool current_view_active_        ABSL_GUARDED_BY(view_mu_);
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<Index>
-        index_collection_        ABSL_GUARDED_BY(view_mu_);
+        index_collection_            ABSL_GUARDED_BY(view_mu_);
 
     log_utils::FutureRequests future_requests_;
 
@@ -40,7 +40,6 @@ private:
     PerTagMinSeqnumTable per_tag_min_seqnum_table_;
 
     void OnViewCreated(const View* view) override;
-    // void OnViewFrozen(const View* view) override;
     void OnViewFinalized(const FinalizedView* finalized_view) override;
 
     void HandleReadRequest(const protocol::SharedLogMessage& request) override;
@@ -59,14 +58,11 @@ private:
     bool AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result);
 
     void ProcessIndexResult(const IndexQueryResult& query_result);
-    // void ProcessIndexMinResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                     Index::QueryResultVec* more_results);
 
     void ForwardReadRequest(const IndexQueryResult& query_result);
-
-    //void BackgroundThreadMain() override;
-    
+   
     void FlushIndexEntries();
 
     protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
@@ -74,8 +70,6 @@ private:
     IndexQuery BuildIndexQuery(const protocol::SharedLogMessage& message, const uint16_t original_requester_id);
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
     IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message);
-
-    // IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message, IndexResultProto result);
 
     DISALLOW_COPY_AND_ASSIGN(IndexNode);
 };

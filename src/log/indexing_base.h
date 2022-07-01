@@ -1,6 +1,5 @@
 #pragma once
 
-//#include "base/thread.h"
 #include "log/common.h"
 #include "log/view.h"
 #include "log/view_watcher.h"
@@ -26,7 +25,6 @@ protected:
     uint16_t my_node_id() const { return node_id_; }
 
     virtual void OnViewCreated(const View* view) = 0;
-    // virtual void OnViewFrozen(const View* view) = 0;
     virtual void OnViewFinalized(const FinalizedView* finalized_view) = 0;
 
     virtual void HandleReadRequest(const protocol::SharedLogMessage& request) = 0;
@@ -37,15 +35,8 @@ protected:
     virtual void OnRecvRegistration(const protocol::SharedLogMessage& message) = 0;
     virtual void RemoveEngineNode(uint16_t engine_node_id) = 0;
 
-    //virtual void BackgroundThreadMain() = 0;
-
     void MessageHandler(const protocol::SharedLogMessage& message,
                         std::span<const char> payload);
-    // void SendIndexData(const View* view, const IndexDataProto& index_data_proto);
-
-    // void SendEngineIndexResult(const protocol::SharedLogMessage& request,
-    //                          protocol::SharedLogMessage* response,
-    //                          std::span<const char> tags_data);
 
     void SendMasterIndexResult(const IndexQueryResult& result);
     void SendIndexReadResponse(const IndexQueryResult& result, uint32_t logspace_id);
@@ -60,8 +51,6 @@ private:
 
     ViewWatcher view_watcher_;
 
-    //base::Thread background_thread_;
-
     absl::flat_hash_map</* id */ int, std::unique_ptr<server::IngressConnection>>
         ingress_conns_;
 
@@ -69,11 +58,7 @@ private:
     absl::flat_hash_map</* id */ int, std::unique_ptr<server::EgressHub>>
         egress_hubs_ ABSL_GUARDED_BY(conn_mu_);
 
-    //std::optional<LRUCache> log_cache_;
-
     void SetupZKWatchers();
-    void SetupTimers();
-
 
     void OnConnectionClose(server::ConnectionBase* connection) override;
     void OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
