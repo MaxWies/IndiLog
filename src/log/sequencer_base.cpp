@@ -121,7 +121,7 @@ void SequencerBase::PropagateMetaLog(const View* view, const ViewMutable* view_m
     absl::flat_hash_set<uint16_t> storage_nodes;
     switch (metalog.type()) {
     case MetaLogProto::NEW_LOGS:
-        for (const auto& [storage_shard_id, engine_node_id] : view_mutable->GetStorageShardOccupation()){
+        for (const auto& [storage_shard_id, engine_node_id] : view_mutable->storage_shard_occupation()){
             engine_nodes.insert(engine_node_id);
         }
         for (uint16_t storage_id : view->GetStorageNodes()) {

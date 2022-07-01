@@ -4,6 +4,7 @@
 #include "log/common.h"
 #include "log/view.h"
 #include "log/view_watcher.h"
+#include "log/view_mutable.h"
 #include "log/db.h"
 #include "log/cache.h"
 #include "server/server_base.h"

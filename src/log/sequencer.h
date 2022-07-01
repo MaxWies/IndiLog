@@ -3,6 +3,7 @@
 #include "log/sequencer_base.h"
 #include "log/log_space.h"
 #include "log/utils.h"
+#include "log/view_mutable.h"
 
 namespace faas {
 namespace log {

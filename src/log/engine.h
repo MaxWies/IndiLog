@@ -7,6 +7,7 @@
 #include "log/index_local_seq_cache.h"
 #include "log/index_local_tag_cache.h"
 #include "log/utils.h"
+#include "log/view_mutable.h"
 
 namespace faas {
 

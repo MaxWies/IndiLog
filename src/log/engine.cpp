@@ -213,7 +213,7 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     }
     if (!local_index_misses.empty()) {
         absl::ReaderMutexLock view_lk(&view_mu_);
-        auto my_storage_shards = view_mutable_.GetMyStorageShards();
+        auto my_storage_shards = view_mutable_.engine_storage_shards();
         SomeIOWorker()->ScheduleFunction(
             nullptr, [this, misses = std::move(local_index_misses), finalized_view = finalized_view, storage_shards = my_storage_shards] 
             {
@@ -283,7 +283,7 @@ static Message BuildLocalReadOKResponse(const LogEntry& log_entry) {
 
 #define IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(LOGSPACE_ID, METALOG_POSITION)                       \
     do {                                                             \
-        if (!view_mutable_.GetMyStorageShards().contains(LOGSPACE_ID)) { \
+        if (!view_mutable_.engine_storage_shards().contains(LOGSPACE_ID)) { \
             HLOG(INFO) << "No connection to logspace " << LOGSPACE_ID; \
             uint32_t current_max = 0;   \
             if(max_metalog_position_.contains(LOGSPACE_ID)) {   \
@@ -325,7 +325,7 @@ void Engine::HandleLocalAppend(LocalOp* op) {
         }
         view = current_view_;
         uint32_t logspace_id = view->LogSpaceIdentifier(op->user_logspace);
-        storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
+        storage_shard = view_mutable_.GetEngineStorageShard(logspace_id);
         if (storage_shard == nullptr){
             HLOG_F(WARNING, "No storage shard for logspace={}", logspace_id);
             return;
@@ -445,8 +445,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_SEEN_FUTURE_VIEW(op);
         logspace_id = current_view_->LogSpaceIdentifier(op->user_logspace);
-        if(view_mutable_.GetMyStorageShards().contains(logspace_id)){
-            storage_shard = view_mutable_.GetMyStorageShard(logspace_id);
+        if(view_mutable_.engine_storage_shards().contains(logspace_id)){
+            storage_shard = view_mutable_.GetEngineStorageShard(logspace_id);
         }
         view_id = current_view_->id();
         if (storage_shard != nullptr){
@@ -734,7 +734,7 @@ void Engine::ProcessLocalIndexMisses(const IndexQueryResultVec& misses, uint32_t
         HandleIndexTierRead(
             onging_reads_.GetChecked(miss.original_query.client_data), 
             current_view_->id(), 
-            view_mutable_.GetMyStorageShard(logspace_id)
+            view_mutable_.GetEngineStorageShard(logspace_id)
         );
     }
 }
@@ -936,7 +936,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             received_message.origin_node_id, received_message.storage_shard_id, received_message.local_start_id, received_message.metalog_position
         );
         const View::StorageShard* storage_shard = current_view_->GetStorageShard(bits::JoinTwo16(received_message.sequencer_id, received_message.storage_shard_id));
-        view_mutable_.UpdateMyStorageShards(logspace_id, storage_shard);
+        view_mutable_.UpdateEngineStorageShards(logspace_id, storage_shard);
         uint32_t local_start_id = view_mutable_.GetLocalStartOfConnection(received_message.logspace_id);
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);

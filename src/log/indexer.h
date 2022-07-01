@@ -5,6 +5,7 @@
 #include "log/index_shard.h"
 #include "log/aggregating.h"
 #include "log/utils.h"
+#include "log/view_mutable.h"
 
 namespace faas {
 namespace log {

@@ -164,7 +164,7 @@ void StorageBase::SendIndexData(const View* view, const ViewMutable* view_mutabl
     message.payload_size = gsl::narrow_cast<uint32_t>(serialized_data.size());
     if (!index_tier_only_){
         HVLOG(1) << "MetalogUpdate: Send index data to storage nodes";
-        for (auto& [shard_id, engine_id] : view_mutable->GetStorageShardOccupation()) {
+        for (auto& [shard_id, engine_id] : view_mutable->storage_shard_occupation()) {
             if(bits::HighHalf32(shard_id) == bits::LowHalf32(logspace_id)){
                 SendSharedLogMessage(protocol::ConnType::STORAGE_TO_ENGINE,
                                 engine_id, message, STRING_AS_SPAN(serialized_data));

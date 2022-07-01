@@ -3,6 +3,7 @@
 #include "log/common.h"
 #include "log/view.h"
 #include "log/view_watcher.h"
+#include "log/view_mutable.h"
 #include "server/server_base.h"
 #include "server/ingress_connection.h"
 #include "server/egress_hub.h"
