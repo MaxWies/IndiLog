@@ -54,7 +54,8 @@ private:
     log_utils::ThreadedMap<LocalOp> onging_reads_;
 
     absl::flat_hash_map<uint32_t, uint32_t> max_metalog_position_;
-    absl::flat_hash_map<uint32_t, uint32_t> max_index_metalog_position_;  
+    absl::flat_hash_map<uint32_t, uint32_t> max_index_metalog_position_;
+    absl::flat_hash_map<uint16_t, uint64_t> suffix_chain_heads_;
 
 #ifdef __FAAS_STAT_THREAD
     base::Thread statistics_thread_;

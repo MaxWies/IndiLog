@@ -51,10 +51,10 @@ void SeqnumSuffixChain::Trim(size_t* counter){
     }
 }
 
-void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
+uint64_t SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
     if(suffix_chain_.empty()){
         HLOG(WARNING) << "Chain has no links";
-        return;
+        return 0;
     }
     if((--suffix_chain_.end())->second->ProvideMetaLog(metalog_proto)){
         current_entries_++;
@@ -79,6 +79,10 @@ void SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
         DCHECK(counter == 0);
         current_entries_ -= counter_copy;
     }
+    uint64_t seqnum = 0;
+    uint16_t storage_shard_id = 0;
+    GetHead(&seqnum, &storage_shard_id);
+    return seqnum;
 }
 
 void SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {

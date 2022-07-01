@@ -270,6 +270,7 @@ void EngineBase::OnMessageFromFuncWorker(const Message& message) {
     op->type = MessageHelper::GetSharedLogOpType(message);
     op->seqnum = kInvalidLogSeqNum;
     op->query_tag = kInvalidLogTag;
+    op->index_lookup_miss = false;
     op->user_tags.clear();
     op->data.Reset();
 

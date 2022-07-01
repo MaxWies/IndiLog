@@ -29,7 +29,7 @@ bool SeqnumCache::Get(uint64_t seqnum, uint16_t* storage_shard_id){
     auto status = dbm_->Get(key_str, &data);
     if (status.IsOK()){
         int parsed_storage_shard_id;
-        if(!absl::SimpleAtoi(data, &parsed_storage_shard_id)){
+        if(!absl::SimpleAtoi(data.c_str(), &parsed_storage_shard_id)){
             LOG(FATAL) << "Cannot parse storage shard id";
         }
         *storage_shard_id = gsl::narrow_cast<uint16_t>(parsed_storage_shard_id);
@@ -65,7 +65,7 @@ IndexQueryResult SeqnumCache::BuildFoundResult(const IndexQuery& query, uint64_t
     uint16_t view_id = log_utils::GetViewId(query.query_seqnum);
     return IndexQueryResult {
         .state = IndexQueryResult::kFound,
-        .metalog_progress = 0,
+        .metalog_progress = query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {
@@ -79,7 +79,7 @@ IndexQueryResult SeqnumCache::BuildFoundResult(const IndexQuery& query, uint64_t
 IndexQueryResult SeqnumCache::BuildNotFoundResult(const IndexQuery& query){
    return IndexQueryResult {
         .state = IndexQueryResult::kEmpty,
-        .metalog_progress = 0,
+        .metalog_progress = query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {

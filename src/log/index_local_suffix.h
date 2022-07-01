@@ -105,7 +105,7 @@ public:
     void Trim(uint64_t bound);
     void Trim(size_t* counter);
     //SuffixSeq* GetLast();
-    void ProvideMetaLog(const MetaLogProto& metalog_proto);
+    uint64_t ProvideMetaLog(const MetaLogProto& metalog_proto);
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
     void Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size);

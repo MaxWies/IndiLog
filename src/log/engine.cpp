@@ -240,6 +240,7 @@ void Engine::OnActivateCaching(){
             [&] (uint32_t id, LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
                 auto ptr = suffix_chain_ptr.Lock();
                 ptr->Clear();
+                suffix_chain_heads_[bits::LowHalf32(id)] = 0;
             }
         );
         tag_cache_collection_.ForEachLogSpace(
@@ -472,30 +473,33 @@ void Engine::HandleLocalRead(LocalOp* op) {
     }
     IndexQuery query = BuildIndexQuery(op);
     if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
+        Index::QueryResultVec query_results;
         Index::QueryResultVec local_index_misses;
         // use seqnum suffix
         if(op->query_tag == kEmptyLogTag){
-            Index::QueryResultVec query_results;
-            {
-                auto locked_suffix_chain = suffix_chain_ptr.Lock();
-                locked_suffix_chain->MakeQuery(query);
-                locked_suffix_chain->PollQueryResults(&query_results);
-            }
-            ProcessIndexQueryResults(query_results, &local_index_misses);
-            if (local_index_misses.size() < 1){
-                return;
+            if(query.query_seqnum >= suffix_chain_heads_[bits::LowHalf32(logspace_id)]) {
+                {
+                    auto locked_suffix_chain = suffix_chain_ptr.Lock();
+                    locked_suffix_chain->MakeQuery(query);
+                    locked_suffix_chain->PollQueryResults(&query_results);
+                }
+                ProcessIndexQueryResults(query_results, &local_index_misses);
+                if (local_index_misses.size() < 1){
+                    return;
+                }
             }
             // use seqnum cache
-            query_results.clear();
-            for(IndexQueryResult result : local_index_misses){
-                query_results.push_back(seqnum_cache_->MakeQuery(result.original_query));
+            else {
+                IndexQueryResult cache_result = seqnum_cache_->MakeQuery(query);
+                if (!cache_result.IsFound()) {
+                    op->index_lookup_miss = true;
+                }
+                query_results.push_back(cache_result);
+                ProcessIndexQueryResults(query_results, &local_index_misses);
             }
-            local_index_misses.clear();
-            ProcessIndexQueryResults(query_results, &local_index_misses);
         }
         // use tag cache
         else {
-            Index::QueryResultVec query_results;
             {
                 auto locked_tag_cache = tag_cache_ptr.Lock();
                 locked_tag_cache->MakeQuery(query);
@@ -621,7 +625,7 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
             {
                 auto locked_suffix_chain = suffix_chain_ptr.Lock();
                 for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
-                    locked_suffix_chain->ProvideMetaLog(metalog_proto);
+                    suffix_chain_heads_[message.sequencer_id] = locked_suffix_chain->ProvideMetaLog(metalog_proto);
                 }
                 locked_suffix_chain->PollQueryResults(&query_results);
             }
@@ -759,6 +763,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
         if (result == SharedLogResultType::READ_OK) {
             uint64_t seqnum = bits::JoinTwo32(message.logspace_id, message.seqnum_lowhalf);
             uint64_t query_tag = op->query_tag;
+            bool local_index_miss = op->index_lookup_miss;
             HVLOG_F(1, "Receive remote read response for log (seqnum {})", seqnum);
             std::span<const uint64_t> user_tags;
             std::span<const char> log_data;
@@ -771,7 +776,7 @@ void Engine::OnRecvResponse(const SharedLogMessage& message,
             }
             FinishLocalOpWithResponse(op, &response, message.user_metalog_progress);
             // Put the received seqnum into seqnum cache for empty tag queries
-            if (query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
+            if (local_index_miss && query_tag == kEmptyLogTag && seqnum_cache_.has_value()){
                 seqnum_cache_->Put(seqnum, message.storage_shard_id);
             }
             // Put the received log entry into log cache
@@ -946,6 +951,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.storage_shard_id, current_view_, received_message.sequencer_id, metalog_position, received_message.local_start_id));
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             if(!suffix_chain_collection_.LogSpaceExists(received_message.sequencer_id)){
+                suffix_chain_heads_[received_message.sequencer_id] = 0;
                 suffix_chain_collection_.InstallLogSpace(std::make_unique<SeqnumSuffixChain>(received_message.sequencer_id, absl::GetFlag(FLAGS_slog_engine_seqnum_suffix_cap), 0.2));
             }
             auto suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(received_message.sequencer_id);
@@ -1134,9 +1140,6 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
             local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif 
             ProcessIndexFoundResult(result);
-            if (result.original_query.user_tag == kEmptyLogTag && seqnum_cache_.has_value()){
-                seqnum_cache_->Put(result.found_result.seqnum, result.found_result.storage_shard_id);
-            }
             break;
         case IndexQueryResult::kEmpty:
             local_index_misses->push_back(result);

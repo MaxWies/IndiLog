@@ -65,6 +65,7 @@ protected:
         uint64_t seqnum;
         uint64_t func_call_id;
         int64_t start_timestamp;
+        bool index_lookup_miss;
         UserTagVec user_tags;
         utils::AppendableBuffer data;
     };
