@@ -2,7 +2,7 @@
 
 #include "log/engine_base.h"
 #include "log/log_space.h"
-#include "log/index.h"
+#include "log/index_complete.h"
 #include "log/index_local_suffix.h"
 #include "log/index_local_seq_cache.h"
 #include "log/index_local_tag_cache.h"
@@ -37,8 +37,8 @@ private:
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
     LogSpaceCollection<LogProducer>
         producer_collection_         ABSL_GUARDED_BY(view_mu_);
-    LogSpaceCollection<Index>
-        index_collection_            ABSL_GUARDED_BY(view_mu_);
+    LogSpaceCollection<IndexComplete>
+        index_complete_collection_      ABSL_GUARDED_BY(view_mu_);
 
     bool min_seqnum_tag_completion_;
 
@@ -98,7 +98,7 @@ private:
 
     void HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::StorageShard* storage_shard);
     void HandleIndexTierMinSeqnumRead(LocalOp* op, uint64_t tag, uint16_t view_id, uint64_t log_tail_seqnum, const View::StorageShard* storage_shard);
-    void ProcessLocalIndexMisses(const Index::QueryResultVec& miss_results, uint32_t logspace_id);
+    void ProcessLocalIndexMisses(const IndexQueryResultVec& miss_results, uint32_t logspace_id);
 
     void OnRecvNewMetaLogs(const protocol::SharedLogMessage& message,
                            std::span<const char> payload) override;
@@ -109,13 +109,13 @@ private:
     void OnRecvRegistrationResponse(const protocol::SharedLogMessage& message) override;
 
     void ProcessAppendResults(const LogProducer::AppendResultVec& results);
-    void ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* not_found_results);
-    void ProcessIndexQueryResultsComplete(const Index::QueryResultVec& results);
+    void ProcessIndexQueryResults(const IndexQueryResultVec& results, IndexQueryResultVec* not_found_results);
+    void ProcessIndexQueryResultsComplete(const IndexQueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void ProcessIndexFoundResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
-                                    Index::QueryResultVec* more_results);
+                                    IndexQueryResultVec* more_results);
 
     inline LogMetaData MetaDataFromAppendOp(LocalOp* op) {
         DCHECK(op->type == protocol::SharedLogOpType::APPEND);

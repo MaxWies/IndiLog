@@ -39,7 +39,7 @@ void IndexNode::OnViewCreated(const View* view) {
                 }
                 //TODO: currently all index nodes have index for sequencer
                 HLOG_F(INFO, "Create logspace for view {} and sequencer {}", view->id(), sequencer_id);
-                index_collection_.InstallLogSpace(std::make_unique<Index>(view, sequencer_id, my_node_id() % view->num_index_shards(), view->num_index_shards()));
+                index_collection_.InstallLogSpace(std::make_unique<IndexShard>(view, sequencer_id, my_node_id() % view->num_index_shards(), view->num_index_shards()));
                 view_mutable_.InitializeCurrentEngineNodeIds(sequencer_id);
             }
         }
@@ -64,15 +64,15 @@ void IndexNode::OnViewCreated(const View* view) {
 void IndexNode::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
-    Index::QueryResultVec index_query_results;
+    IndexQueryResultVec index_query_results;
     {
         absl::MutexLock view_lk(&view_mu_);
         DCHECK_EQ(finalized_view->view()->id(), current_view_->id());
         index_collection_.ForEachActiveLogSpace(
             finalized_view->view(),
             [finalized_view, &index_query_results] (uint32_t logspace_id,
-                                              LockablePtr<Index> index_ptr) {
-                log_utils::FinalizedLogSpace<Index>(
+                                              LockablePtr<IndexShard> index_ptr) {
+                log_utils::FinalizedLogSpace<IndexShard>(
                     index_ptr, finalized_view);
                 auto locked_index = index_ptr.Lock();
                 locked_index->PollQueryResults(&index_query_results);
@@ -126,7 +126,7 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
           || op_type == SharedLogOpType::READ_NEXT_B);
     DCHECK(  request.aggregator_type == protocol::kUseMasterSlave 
           || request.aggregator_type == protocol::kUseAggregator);
-    LockablePtr<Index> index_ptr;
+    LockablePtr<IndexShard> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(request, EMPTY_CHAR_SPAN);
@@ -138,7 +138,7 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
         HVLOG_F(1, "IndexRead: Make query. client_id={}, metalog={}, logspace={}, tag={}, query_seqnum={}", 
             request.client_data, bits::HexStr0x(query.metalog_progress), request.logspace_id, query.user_tag, bits::HexStr0x(query.query_seqnum)
         );
-        Index::QueryResultVec query_results;
+        IndexQueryResultVec query_results;
         {
             auto locked_index = index_ptr.Lock();
             locked_index->MakeQuery(query);
@@ -182,7 +182,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
         LOG(FATAL) << "IndexUpdate: Failed to parse IndexDataProto";
     }
     const View* view = nullptr;
-    Index::QueryResultVec query_results;
+    IndexQueryResultVec query_results;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
@@ -202,7 +202,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
             {
                 auto locked_index = index_ptr.Lock();
                 for (int i : relevant_packages) {
-                    locked_index->AdvanceIndexProgress(index_data_packages.index_data_proto().at(i), view->num_index_shards());
+                    locked_index->AdvanceIndexProgress(index_data_packages.index_data_proto().at(i));
                 }
                 locked_index->PollQueryResults(&query_results);
             }
@@ -350,12 +350,12 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
 }
 
 void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
-                                        Index::QueryResultVec* more_results) {
+                                           IndexQueryResultVec* more_results) {
     DCHECK(query_result.state == IndexQueryResult::kContinue);
     HVLOG_F(1, "IndexRead: Process IndexContinueResult: next_view_id={}",
             query_result.next_view_id);
     const IndexQuery& query = query_result.original_query;
-    LockablePtr<Index> index_ptr;
+    LockablePtr<IndexShard> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         uint16_t view_id = query_result.next_view_id;
@@ -401,8 +401,8 @@ void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     }
 }
 
-void IndexNode::ProcessIndexQueryResults(const Index::QueryResultVec& results) {
-    Index::QueryResultVec more_results;
+void IndexNode::ProcessIndexQueryResults(const IndexQueryResultVec& results) {
+    IndexQueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         switch (result.state) {
         case IndexQueryResult::kEmpty:

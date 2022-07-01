@@ -151,8 +151,8 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
     LogProducer::AppendResultVec append_results;
-    Index::QueryResultVec query_results;
-    Index::QueryResultVec local_index_misses;
+    IndexQueryResultVec query_results;
+    IndexQueryResultVec local_index_misses;
     {
         absl::MutexLock view_lk(&view_mu_);
         DCHECK_EQ(finalized_view->view()->id(), current_view_->id());
@@ -182,11 +182,11 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
                 // );
                 break;
             case IndexingStrategy::COMPLETE:
-                index_collection_.ForEachActiveLogSpace(
+                index_complete_collection_.ForEachActiveLogSpace(
                     finalized_view->view(),
                     [finalized_view, &query_results] (uint32_t logspace_id,
-                                                    LockablePtr<Index> index_ptr) {
-                        log_utils::FinalizedLogSpace<Index>(
+                                                    LockablePtr<IndexComplete> index_ptr) {
+                        log_utils::FinalizedLogSpace<IndexComplete>(
                             index_ptr, finalized_view);
                         auto locked_index = index_ptr.Lock();
                         locked_index->PollQueryResults(&query_results);
@@ -440,7 +440,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
     const View::StorageShard* storage_shard = nullptr;
     LockablePtr<SeqnumSuffixChain> suffix_chain_ptr;
     LockablePtr<TagCache> tag_cache_ptr;
-    LockablePtr<Index> index_ptr;
+    LockablePtr<IndexComplete> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         ONHOLD_IF_SEEN_FUTURE_VIEW(op);
@@ -454,7 +454,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
                 suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
                 tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
             } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
-                index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+                index_ptr = index_complete_collection_.GetLogSpaceChecked(logspace_id);
             }
         }
     }
@@ -473,8 +473,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
     }
     IndexQuery query = BuildIndexQuery(op);
     if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
-        Index::QueryResultVec query_results;
-        Index::QueryResultVec local_index_misses;
+        IndexQueryResultVec query_results;
+        IndexQueryResultVec local_index_misses;
         // use seqnum suffix
         if(op->query_tag == kEmptyLogTag){
             if(query.query_seqnum >= suffix_chain_heads_[bits::LowHalf32(logspace_id)]) {
@@ -525,7 +525,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         }
         if (index_ptr != nullptr && use_complete_index) {
             IndexQuery query = BuildIndexQuery(op);
-            Index::QueryResultVec query_results;
+            IndexQueryResultVec query_results;
             {
                 auto locked_index = index_ptr.Lock();
                 locked_index->MakeQuery(query);
@@ -599,8 +599,8 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
     MetaLogsProto metalogs_proto = log_utils::MetaLogsFromPayload(payload);
     DCHECK_EQ(metalogs_proto.logspace_id(), message.logspace_id);
     LogProducer::AppendResultVec append_results;
-    Index::QueryResultVec query_results;
-    Index::QueryResultVec local_index_misses;
+    IndexQueryResultVec query_results;
+    IndexQueryResultVec local_index_misses;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         IGNORE_IF_NO_CONNECTION_FOR_LOGSPACE(message.logspace_id, metalogs_proto.metalogs().at(metalogs_proto.metalogs_size()-1).metalog_seqnum());
@@ -630,11 +630,12 @@ void Engine::OnRecvNewMetaLogs(const SharedLogMessage& message,
                 locked_suffix_chain->PollQueryResults(&query_results);
             }
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE){
-            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+            auto index_ptr = index_complete_collection_.GetLogSpaceChecked(message.logspace_id);
             {
                 auto locked_index = index_ptr.Lock();
                 for (const MetaLogProto& metalog_proto : metalogs_proto.metalogs()) {
                     locked_index->ProvideMetaLog(metalog_proto);
+                    locked_index->AdvanceIndexProgress();
                 }
                 locked_index->PollQueryResults(&query_results);
             }
@@ -660,8 +661,8 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
                                          static_cast<int>(payload.size()))) {
         LOG(FATAL) << "Failed to parse IndexDataProto";
     }
-    Index::QueryResultVec query_results;
-    Index::QueryResultVec local_index_misses;
+    IndexQueryResultVec query_results;
+    IndexQueryResultVec local_index_misses;
     {
         // if (!view_mutable_.GetMyStorageShards().contains(message.logspace_id)) {
         //     uint32_t current_max;
@@ -706,7 +707,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
             );
             ONHOLD_IF_FROM_FUTURE_VIEW(message, payload);
             // feed complete index
-            auto index_ptr = index_collection_.GetLogSpaceChecked(message.logspace_id);
+            auto index_ptr = index_complete_collection_.GetLogSpaceChecked(message.logspace_id);
             {
                 auto locked_index = index_ptr.Lock();
                 for (const IndexDataProto& index_data_proto : index_data_packages_proto.index_data_proto()){
@@ -727,7 +728,7 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     } 
 }
 
-void Engine::ProcessLocalIndexMisses(const Index::QueryResultVec& misses, uint32_t logspace_id){
+void Engine::ProcessLocalIndexMisses(const IndexQueryResultVec& misses, uint32_t logspace_id){
     absl::ReaderMutexLock view_lk(&view_mu_);
     for(const IndexQueryResult& miss : misses){
         HandleIndexTierRead(
@@ -973,7 +974,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
             }
             // seq cache is built in constructor and physical log independent
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
-            index_collection_.InstallLogSpace(std::make_unique<Index>(current_view_, received_message.sequencer_id));
+            index_complete_collection_.InstallLogSpace(std::make_unique<IndexComplete>(current_view_, received_message.sequencer_id));
         }
         // run ready requests
         std::vector<SharedLogRequest> ready_requests;
@@ -1092,13 +1093,13 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
 }
 
 void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
-                                        Index::QueryResultVec* more_results) {
+                                        IndexQueryResultVec* more_results) {
     DCHECK(query_result.state == IndexQueryResult::kContinue);
     HVLOG_F(1, "Process IndexContinueResult: next_view_id={}",
             query_result.next_view_id);
     const IndexQuery& query = query_result.original_query;
     const View::Sequencer* sequencer_node = nullptr;
-    LockablePtr<Index> index_ptr;
+    LockablePtr<IndexComplete> index_ptr;
     {
         absl::ReaderMutexLock view_lk(&view_mu_);
         uint16_t view_id = query_result.next_view_id;
@@ -1108,7 +1109,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         const View* view = views_.at(view_id);
         uint32_t logspace_id = view->LogSpaceIdentifier(query.user_logspace);
         sequencer_node = view->GetSequencerNode(bits::LowHalf32(logspace_id));
-        index_ptr = index_collection_.GetLogSpaceChecked(logspace_id);
+        index_ptr = index_complete_collection_.GetLogSpaceChecked(logspace_id);
     }
     if (index_ptr != nullptr) {
         HVLOG(1) << "Use local index";
@@ -1130,8 +1131,8 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     }
 }
 
-void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Index::QueryResultVec* local_index_misses) {
-    Index::QueryResultVec more_results;
+void Engine::ProcessIndexQueryResults(const IndexQueryResultVec& results, IndexQueryResultVec* local_index_misses) {
+    IndexQueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         const IndexQuery& query = result.original_query;
         switch (result.state) {
@@ -1164,8 +1165,8 @@ void Engine::ProcessIndexQueryResults(const Index::QueryResultVec& results, Inde
     }
 }
 
-void Engine::ProcessIndexQueryResultsComplete(const Index::QueryResultVec& results) {
-    Index::QueryResultVec more_results;
+void Engine::ProcessIndexQueryResultsComplete(const IndexQueryResultVec& results) {
+    IndexQueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         const IndexQuery& query = result.original_query;
         switch (result.state) {
@@ -1450,14 +1451,14 @@ void Engine::StatisticsThreadMain() {
                     );
                 }
                 else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
-                    index_collection_.ForEachActiveLogSpace(
-                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                    index_complete_collection_.ForEachActiveLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<IndexComplete> index_ptr) {
                             auto ptr = index_ptr.Lock();
                             ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
                         }
                     );
-                    index_collection_.ForEachFinalizedLogSpace(
-                        [&] (uint32_t logspace_id, LockablePtr<Index> index_ptr) {
+                    index_complete_collection_.ForEachFinalizedLogSpace(
+                        [&] (uint32_t logspace_id, LockablePtr<IndexComplete> index_ptr) {
                             auto ptr = index_ptr.Lock();
                             ptr->Aggregate(&complete_index_num_seqnums, &complete_index_num_tags, &complete_index_num_seqnums_of_tags, &complete_index_size);
                         }

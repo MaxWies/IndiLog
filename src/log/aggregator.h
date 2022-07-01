@@ -3,7 +3,7 @@
 #include "log/aggregator_base.h"
 #include "log/aggregating.h"
 #include "log/log_space.h"
-#include "log/index.h"
+#include "log/index_dto.h"
 #include "log/utils.h"
 
 namespace faas {

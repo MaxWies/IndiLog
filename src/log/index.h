@@ -6,36 +6,50 @@
 namespace faas {
 namespace log {
 
-class Index final : public LogSpaceBase {
+class PerSpaceIndex {
+public:
+    PerSpaceIndex(uint32_t logspace_id, uint32_t user_logspace);
+    ~PerSpaceIndex() {}
+
+    void Add(uint32_t seqnum_lowhalf, uint16_t engine_id, const UserTagVec& user_tags);
+
+    bool FindPrev(uint64_t query_seqnum, uint64_t user_tag,
+                  uint64_t* seqnum, uint16_t* engine_id) const;
+    bool FindNext(uint64_t query_seqnum, uint64_t user_tag,
+                  uint64_t* seqnum, uint16_t* engine_id) const;
+
+    void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
+
+private:
+    uint32_t logspace_id_;
+    uint32_t user_logspace_;
+
+    absl::flat_hash_map</* seqnum */ uint32_t, uint16_t> engine_ids_;
+    std::vector<uint32_t> seqnums_;
+    absl::flat_hash_map</* tag */ uint64_t, std::vector<uint32_t>> seqnums_by_tag_;
+
+    bool FindPrev(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
+                  uint32_t* result_seqnum) const;
+    bool FindNext(const std::vector<uint32_t>& seqnums, uint64_t query_seqnum,
+                  uint32_t* result_seqnum) const;
+
+    DISALLOW_COPY_AND_ASSIGN(PerSpaceIndex);
+};
+
+class Index : public LogSpaceBase {
 public:
     static constexpr absl::Duration kBlockingQueryTimeout = absl::Seconds(1);
 
     Index(const View* view, uint16_t sequencer_id);
     Index(const View* view, uint16_t sequencer_id, uint32_t index_shard_id, size_t num_shards);
-    ~Index();
-
-    void ProvideIndexData(const IndexDataProto& index_data);
-    void ProvideIndexDataShard(const IndexDataProto& index_data);
+    virtual ~Index();
 
     void MakeQuery(const IndexQuery& query);
-
-    using QueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
-    void PollQueryResults(QueryResultVec* results);
-
-    void AdvanceIndexProgress();
-    bool AdvanceIndexProgress(const IndexDataProto& index_data, size_t num_index_shards);
-
-    bool TryCompleteIndexUpdates(uint32_t* seqnum_position, size_t num_index_shards);
-    bool CheckIfNewIndexData(const IndexDataProto& index_data);
+    void PollQueryResults(IndexQueryResultVec* results);
 
     void Aggregate(size_t* num_seqnums, size_t* num_tags, size_t* num_seqnums_of_tags, size_t* size);
 
-    uint32_t indexed_metalog_position(){
-        return indexed_metalog_position_;
-    }
-
-private:
-    class PerSpaceIndex;
+protected:
     absl::flat_hash_map</* user_logspace */ uint32_t,
                         std::unique_ptr<PerSpaceIndex>> index_;
 
@@ -45,43 +59,22 @@ private:
                   IndexQuery> pending_queries_;
     std::vector<std::pair</* start_timestamp */ int64_t,
                           IndexQuery>> blocking_reads_;
-    QueryResultVec pending_query_results_;
+    IndexQueryResultVec pending_query_results_;
 
     std::deque<std::pair</* metalog_seqnum */ uint32_t,
                          /* end_seqnum */ uint32_t>> cuts_;
     uint32_t indexed_metalog_position_;
 
-    bool first_index_data_; // for local indexing
-
-    // for index tier
-    absl::flat_hash_map<uint32_t /* metalog_position */, std::pair<size_t, absl::flat_hash_set<uint16_t>>> storage_shards_index_updates_;
-    absl::flat_hash_map<uint32_t /* metalog_position */, uint32_t> end_seqnum_positions_;
-
     struct IndexData {
         uint16_t   engine_id;
         uint32_t   user_logspace;
         UserTagVec user_tags;
-        bool skip;
     };
     std::map</* seqnum */ uint32_t, IndexData> received_data_;
     uint32_t data_received_seqnum_position_;
     uint32_t indexed_seqnum_position_;
 
-    size_t num_shards_;
-
-    uint64_t index_metalog_progress() const {
-        return bits::JoinTwo32(identifier(), indexed_metalog_position_);
-    }
-
-    uint64_t sharded_index_metalog_progress() const {
-        uint32_t real_index_metalog_progress = indexed_metalog_position_;
-        if (real_index_metalog_progress <= num_shards_) {
-            real_index_metalog_progress = 0;
-        } else {
-            real_index_metalog_progress -= num_shards_;
-        }
-        return bits::JoinTwo32(identifier(), real_index_metalog_progress);
-    }
+    virtual uint64_t index_metalog_progress() const = 0;
 
     void OnMetaLogApplied(const MetaLogProto& meta_log_proto) override;
     void OnFinalized(uint32_t metalog_position) override;

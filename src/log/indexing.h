@@ -2,7 +2,7 @@
 
 #include "log/indexing_base.h"
 #include "log/log_space.h"
-#include "log/index.h"
+#include "log/index_shard.h"
 #include "log/aggregating.h"
 #include "log/utils.h"
 
@@ -29,7 +29,7 @@ private:
     ViewMutable view_mutable_        ABSL_GUARDED_BY(view_mu_);
     bool current_view_active_        ABSL_GUARDED_BY(view_mu_);
     std::vector<const View*> views_  ABSL_GUARDED_BY(view_mu_);
-    LogSpaceCollection<Index>
+    LogSpaceCollection<IndexShard>
         index_collection_            ABSL_GUARDED_BY(view_mu_);
 
     log_utils::FutureRequests future_requests_;
@@ -51,7 +51,7 @@ private:
 
     void RemoveEngineNode(uint16_t engine_node_id) override;
 
-    void ProcessIndexQueryResults(const Index::QueryResultVec& results);
+    void ProcessIndexQueryResults(const IndexQueryResultVec& results);
     void ProcessRequests(const std::vector<SharedLogRequest>& requests);
 
     void HandleSlaveResult(const protocol::SharedLogMessage& message) override;
@@ -59,7 +59,7 @@ private:
 
     void ProcessIndexResult(const IndexQueryResult& query_result);
     void ProcessIndexContinueResult(const IndexQueryResult& query_result,
-                                    Index::QueryResultVec* more_results);
+                                    IndexQueryResultVec* more_results);
 
     void ForwardReadRequest(const IndexQueryResult& query_result);
    

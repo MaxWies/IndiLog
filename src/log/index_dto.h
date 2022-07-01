@@ -49,5 +49,7 @@ struct IndexQueryResult {
     bool IsPointHit() const;
 };
 
+using IndexQueryResultVec = absl::InlinedVector<IndexQueryResult, 4>;
+
 }  // namespace log
 }  // namespace faas
