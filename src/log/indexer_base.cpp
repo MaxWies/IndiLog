@@ -1,10 +1,10 @@
-#include "log/indexing_base.h"
+#include "log/indexer_base.h"
 
 #include "log/flags.h"
 #include "server/constants.h"
 #include "utils/fs.h"
 
-#define log_header_ "IndexBase: "
+#define log_header_ "IndexerBase: "
 
 namespace faas {
 namespace log {
@@ -21,19 +21,19 @@ using server::IngressConnection;
 using server::EgressHub;
 using server::NodeWatcher;
 
-IndexBase::IndexBase(uint16_t node_id)
+IndexerBase::IndexerBase(uint16_t node_id)
     : ServerBase(node_id, fmt::format("index_{}", node_id), NodeType::kIndexNode),
       node_id_(node_id) {}
 
-IndexBase::~IndexBase() {}
+IndexerBase::~IndexerBase() {}
 
-void IndexBase::StartInternal() {
+void IndexerBase::StartInternal() {
     SetupZKWatchers();
 }
 
-void IndexBase::StopInternal() {}
+void IndexerBase::StopInternal() {}
 
-void IndexBase::SetupZKWatchers() {
+void IndexerBase::SetupZKWatchers() {
     view_watcher_.SetViewCreatedCallback(
         [this] (const View* view) {
             this->OnViewCreated(view);
@@ -52,7 +52,7 @@ void IndexBase::SetupZKWatchers() {
     view_watcher_.StartWatching(zk_session());
 }
 
-void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
+void IndexerBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
                                         const SharedLogMessage& message,
                                         std::span<const char> payload) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
@@ -72,7 +72,7 @@ void IndexBase::OnRecvSharedLogMessage(int conn_type, uint16_t src_node_id,
     MessageHandler(message, payload);
 }
 
-void IndexBase::MessageHandler(const SharedLogMessage& message,
+void IndexerBase::MessageHandler(const SharedLogMessage& message,
                                  std::span<const char> payload) {
     switch (SharedLogMessageHelper::GetOpType(message)) {
     case SharedLogOpType::READ_NEXT:
@@ -100,7 +100,7 @@ void IndexBase::MessageHandler(const SharedLogMessage& message,
     }
 }
 
-void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
+void IndexerBase::SendMasterIndexResult(const IndexQueryResult& result) {
     SharedLogMessage response = SharedLogMessageHelper::NewIndexResultResponse(result.original_query.DirectionToIndexResult());
     response.origin_node_id = my_node_id();
     response.hop_times = result.original_query.hop_times + 1;
@@ -130,7 +130,7 @@ void IndexBase::SendMasterIndexResult(const IndexQueryResult& result) {
     }
 }
 
-void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id){
+void IndexerBase::SendIndexMinReadResponse(const SharedLogMessage& original_request, uint64_t seqnum, uint16_t storage_shard_id){
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(protocol::SharedLogResultType::INDEX_MIN_OK);
     response.origin_node_id = my_node_id();
 
@@ -153,7 +153,7 @@ void IndexBase::SendIndexMinReadResponse(const SharedLogMessage& original_reques
     }
 }
 
-void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {
+void IndexerBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::SharedLogResultType result) {
     SharedLogMessage response = SharedLogMessageHelper::NewResponse(result);
     response.origin_node_id = node_id_;
     response.hop_times = query.hop_times + 1;
@@ -169,7 +169,7 @@ void IndexBase::SendIndexReadFailureResponse(const IndexQuery& query, protocol::
     HVLOG_F(1, "IndexRead: Sent index read failure response to engine={}", engine_id);
 }
 
-bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
+bool IndexerBase::SendStorageReadRequest(const IndexQueryResult& result,
                                         const View::StorageShard* storage_shard_node) {
     HVLOG_F(1, "IndexRead: Send StorageReadRequest for seqnum={}", bits::HexStr0x(result.found_result.seqnum));
     static constexpr int kMaxRetries = 3;
@@ -195,20 +195,20 @@ bool IndexBase::SendStorageReadRequest(const IndexQueryResult& result,
     return false;
 }
 
-void IndexBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
+void IndexerBase::SendRegistrationResponse(const SharedLogMessage& request, SharedLogMessage* response) {
     response->origin_node_id = node_id_;
     response->hop_times = request.hop_times + 1;
     response->payload_size = 0;
     SendSharedLogMessage(protocol::ConnType::INDEX_TO_ENGINE, request.origin_node_id, *response);
 }
 
-bool IndexBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
+bool IndexerBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_node_id,
                                        const SharedLogMessage& message,
                                        std::span<const char> payload1) {
     DCHECK_EQ(size_t{message.payload_size}, payload1.size());
     EgressHub* hub = CurrentIOWorkerChecked()->PickOrCreateConnection<EgressHub>(
         ServerBase::GetEgressHubTypeId(conn_type, dst_node_id),
-        absl::bind_front(&IndexBase::CreateEgressHub, this, conn_type, dst_node_id));
+        absl::bind_front(&IndexerBase::CreateEgressHub, this, conn_type, dst_node_id));
     if (hub == nullptr) {
         HLOG_F(WARNING, "Failed to send shared log message. Hub is null. Connection type {}", gsl::narrow_cast<uint16_t>(conn_type));
         return false;
@@ -219,7 +219,7 @@ bool IndexBase::SendSharedLogMessage(protocol::ConnType conn_type, uint16_t dst_
     return true;
 }
 
-void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
+void IndexerBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
                                       int sockfd) {
     protocol::ConnType type = static_cast<protocol::ConnType>(handshake.conn_type);
     uint16_t src_node_id = handshake.src_node_id;
@@ -250,7 +250,7 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
         &IngressConnection::SharedLogMessageFullSizeCallback);
     connection->SetNewMessageCallback(
         IngressConnection::BuildNewSharedLogMessageCallback(
-            absl::bind_front(&IndexBase::OnRecvSharedLogMessage, this,
+            absl::bind_front(&IndexerBase::OnRecvSharedLogMessage, this,
                              conn_type_id & kConnectionTypeMask, src_node_id)));
     RegisterConnection(PickIOWorkerForConnType(conn_type_id), connection.get());
     DCHECK_GE(connection->id(), 0);
@@ -258,7 +258,7 @@ void IndexBase::OnRemoteMessageConn(const protocol::HandshakeMessage& handshake,
     ingress_conns_[connection->id()] = std::move(connection);
 }
 
-void IndexBase::OnConnectionClose(ConnectionBase* connection) {
+void IndexerBase::OnConnectionClose(ConnectionBase* connection) {
     DCHECK(WithinMyEventLoopThread());
     switch (connection->type() & kConnectionTypeMask) {
     case kEngineIngressTypeId:
@@ -283,7 +283,7 @@ void IndexBase::OnConnectionClose(ConnectionBase* connection) {
     }
 }
 
-EgressHub* IndexBase::CreateEgressHub(protocol::ConnType conn_type,
+EgressHub* IndexerBase::CreateEgressHub(protocol::ConnType conn_type,
                                         uint16_t dst_node_id,
                                         IOWorker* io_worker) {
     struct sockaddr_in addr;
@@ -311,7 +311,7 @@ EgressHub* IndexBase::CreateEgressHub(protocol::ConnType conn_type,
     return hub;
 }
 
-void IndexBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
+void IndexerBase::OnNodeOffline(NodeType node_type, uint16_t node_id){
     if (node_type != NodeType::kEngineNode) {
         return;
     }

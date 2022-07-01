@@ -1,4 +1,4 @@
-#include "log/indexing.h"
+#include "log/indexer.h"
 
 #include "log/flags.h"
 #include "utils/bits.h"
@@ -13,16 +13,16 @@ using protocol::SharedLogMessageHelper;
 using protocol::SharedLogOpType;
 using protocol::SharedLogResultType;
 
-IndexNode::IndexNode(uint16_t node_id)
-    : IndexBase(node_id),
-      log_header_(fmt::format("IndexNode[{}-N]: ", node_id)),
+Indexer::Indexer(uint16_t node_id)
+    : IndexerBase(node_id),
+      log_header_(fmt::format("Indexer[{}-N]: ", node_id)),
       current_view_(nullptr),
       current_view_active_(false),
       per_tag_seqnum_min_completion_(absl::GetFlag(FLAGS_slog_activate_min_seqnum_completion)) {}
 
-IndexNode::~IndexNode() {}
+Indexer::~Indexer() {}
 
-void IndexNode::OnViewCreated(const View* view) {
+void Indexer::OnViewCreated(const View* view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "New view {} created", view->id());
     bool contains_myself = view->contains_index_node(my_node_id());
@@ -37,7 +37,7 @@ void IndexNode::OnViewCreated(const View* view) {
                 if (!view->is_active_phylog(sequencer_id)) {
                     continue;
                 }
-                //TODO: currently all index nodes have index for sequencer
+                //TODO: currently all index nodes have indexes for active sequencers
                 HLOG_F(INFO, "Create logspace for view {} and sequencer {}", view->id(), sequencer_id);
                 index_collection_.InstallLogSpace(std::make_unique<IndexShard>(view, sequencer_id, my_node_id() % view->num_index_shards(), view->num_index_shards()));
                 view_mutable_.InitializeCurrentEngineNodeIds(sequencer_id);
@@ -61,7 +61,7 @@ void IndexNode::OnViewCreated(const View* view) {
     }
 }
 
-void IndexNode::OnViewFinalized(const FinalizedView* finalized_view) {
+void Indexer::OnViewFinalized(const FinalizedView* finalized_view) {
     DCHECK(zk_session()->WithinMyEventLoopThread());
     HLOG_F(INFO, "View {} finalized", finalized_view->view()->id());
     IndexQueryResultVec index_query_results;
@@ -119,7 +119,7 @@ void IndexNode::OnViewFinalized(const FinalizedView* finalized_view) {
         }                                                           \
     } while (0)
 
-void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
+void Indexer::HandleReadRequest(const SharedLogMessage& request) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
     DCHECK(  op_type == SharedLogOpType::READ_NEXT
           || op_type == SharedLogOpType::READ_PREV
@@ -152,7 +152,7 @@ void IndexNode::HandleReadRequest(const SharedLogMessage& request) {
     }
 }
 
-void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
+void Indexer::HandleReadMinRequest(const SharedLogMessage& request) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(request);
     DCHECK(op_type == SharedLogOpType::READ_MIN);
     if (!per_tag_seqnum_min_completion_) {
@@ -172,7 +172,7 @@ void IndexNode::HandleReadMinRequest(const SharedLogMessage& request) {
     SendIndexMinReadResponse(request, found_seqnum, found_storage_shard_id);
 }
 
-void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
+void Indexer::OnRecvNewIndexData(const SharedLogMessage& message,
                                      std::span<const char> payload) {
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::INDEX_DATA);
     HVLOG_F(1, "IndexUpdate: Index data received from storage_node={}", message.origin_node_id);
@@ -216,7 +216,7 @@ void IndexNode::OnRecvNewIndexData(const SharedLogMessage& message,
     }
 }
 
-void IndexNode::FilterNewTags(const View* view, uint32_t logspace_id, const IndexDataProto& index_data) {
+void Indexer::FilterNewTags(const View* view, uint32_t logspace_id, const IndexDataProto& index_data) {
     int n = index_data.seqnum_halves_size();
     auto tag_iter = index_data.user_tags().begin();
     for (int i = 0; i < n; i++) {
@@ -245,7 +245,7 @@ void IndexNode::FilterNewTags(const View* view, uint32_t logspace_id, const Inde
     }
 }
 
-void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
+void Indexer::OnRecvRegistration(const protocol::SharedLogMessage& received_message) {
     DCHECK(SharedLogMessageHelper::GetOpType(received_message) == SharedLogOpType::REGISTER);
     DCHECK(SharedLogMessageHelper::GetResultType(received_message) == SharedLogResultType::REGISTER_ENGINE);
     absl::MutexLock view_lk(&view_mu_);
@@ -285,7 +285,7 @@ void IndexNode::OnRecvRegistration(const protocol::SharedLogMessage& received_me
     SendRegistrationResponse(received_message, &response);
 }
 
-void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
+void Indexer::RemoveEngineNode(uint16_t engine_node_id){
     absl::MutexLock view_lk(&view_mu_);
     view_mutable_.RemoveCurrentEngineNodeId(engine_node_id);
     if (ongoing_engine_index_reads_.contains(engine_node_id)){
@@ -297,7 +297,7 @@ void IndexNode::RemoveEngineNode(uint16_t engine_node_id){
 #undef IGNORE_IF_FROM_PAST_VIEW
 #undef RETURN_IF_LOGSPACE_FINALIZED
 
-void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
+void Indexer::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     if (my_query_result.IsPointHit()){
         ForwardReadRequest(my_query_result);
     }
@@ -314,7 +314,7 @@ void IndexNode::ProcessIndexResult(const IndexQueryResult& my_query_result) {
     }
 }
 
-bool IndexNode::AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result){
+bool Indexer::AggregateIndexResult(const uint16_t index_node_id_other, const IndexQueryResult& index_query_result_other, IndexQueryResult* aggregated_index_query_result){
     HVLOG_F(1, "IndexRead: Index result received. index_node={}, engine_node={}, client_key={}, query_seqnum={}", 
         index_node_id_other, index_query_result_other.original_query.origin_node_id, bits::HexStr0x(index_query_result_other.original_query.client_data), 
         bits::HexStr0x(index_query_result_other.original_query.query_seqnum)
@@ -333,7 +333,7 @@ bool IndexNode::AggregateIndexResult(const uint16_t index_node_id_other, const I
     return engine_index_read_op->Aggregate(num_index_shards, index_node_id_other, index_query_result_other, aggregated_index_query_result);
 }
 
-void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
+void Indexer::HandleSlaveResult(const protocol::SharedLogMessage& message){
     DCHECK(SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_INDEX_RESULT || 
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_PREV_INDEX_RESULT ||
            SharedLogMessageHelper::GetOpType(message) == SharedLogOpType::READ_NEXT_B_INDEX_RESULT);
@@ -349,7 +349,7 @@ void IndexNode::HandleSlaveResult(const protocol::SharedLogMessage& message){
     }
 }
 
-void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
+void Indexer::ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                            IndexQueryResultVec* more_results) {
     DCHECK(query_result.state == IndexQueryResult::kContinue);
     HVLOG_F(1, "IndexRead: Process IndexContinueResult: next_view_id={}",
@@ -377,7 +377,7 @@ void IndexNode::ProcessIndexContinueResult(const IndexQueryResult& query_result,
     }
 }
 
-void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
+void Indexer::ForwardReadRequest(const IndexQueryResult& query_result){
     DCHECK(query_result.state == IndexQueryResult::kFound);
     const View::StorageShard* storage_shard = nullptr;
     uint32_t logspace_id;
@@ -401,7 +401,7 @@ void IndexNode::ForwardReadRequest(const IndexQueryResult& query_result){
     }
 }
 
-void IndexNode::ProcessIndexQueryResults(const IndexQueryResultVec& results) {
+void Indexer::ProcessIndexQueryResults(const IndexQueryResultVec& results) {
     IndexQueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         switch (result.state) {
@@ -421,14 +421,14 @@ void IndexNode::ProcessIndexQueryResults(const IndexQueryResultVec& results) {
     }
 }
 
-void IndexNode::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
+void Indexer::ProcessRequests(const std::vector<SharedLogRequest>& requests) {
     for (const SharedLogRequest& request : requests) {
         MessageHandler(request.message, STRING_AS_SPAN(request.payload));
     }
 }
 
 // not used so far
-SharedLogMessage IndexNode::BuildReadRequestMessage(const IndexQueryResult& result) {
+SharedLogMessage Indexer::BuildReadRequestMessage(const IndexQueryResult& result) {
     DCHECK(result.state == IndexQueryResult::kContinue);
     IndexQuery query = result.original_query;
     SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(
@@ -446,7 +446,7 @@ SharedLogMessage IndexNode::BuildReadRequestMessage(const IndexQueryResult& resu
     return request;
 }
 
-IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uint16_t original_requester_id) {
+IndexQuery Indexer::BuildIndexQuery(const SharedLogMessage& message, const uint16_t original_requester_id) {
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     IndexQuery index_query = IndexQuery {
         .direction = IndexQuery::DirectionFromOpType(op_type),
@@ -483,7 +483,7 @@ IndexQuery IndexNode::BuildIndexQuery(const SharedLogMessage& message, const uin
     return index_query;
 }
 
-IndexQuery IndexNode::BuildIndexQuery(const IndexQueryResult& result) {
+IndexQuery Indexer::BuildIndexQuery(const IndexQueryResult& result) {
     DCHECK(result.state == IndexQueryResult::kContinue);
     IndexQuery query = result.original_query;
     query.initial = false;
@@ -492,7 +492,7 @@ IndexQuery IndexNode::BuildIndexQuery(const IndexQueryResult& result) {
     return query;
 }
 
-IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message){
+IndexQueryResult Indexer::BuildIndexResult(protocol::SharedLogMessage message){
     SharedLogOpType op_type = SharedLogMessageHelper::GetOpType(message);
     return IndexQueryResult {
         .state = message.found_seqnum == kInvalidLogSeqNum ? 
@@ -515,7 +515,7 @@ IndexQueryResult IndexNode::BuildIndexResult(protocol::SharedLogMessage message)
     };
 }
 
-void IndexNode::FlushIndexEntries() {
+void Indexer::FlushIndexEntries() {
     //TODO: persist index data
 }
 

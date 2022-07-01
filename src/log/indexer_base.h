@@ -13,10 +13,10 @@
 namespace faas {
 namespace log {
 
-class IndexBase : public server::ServerBase {
+class IndexerBase : public server::ServerBase {
 public:
-    explicit IndexBase(uint16_t node_id);
-    virtual ~IndexBase();
+    explicit IndexerBase(uint16_t node_id);
+    virtual ~IndexerBase();
 
     void StartInternal() override;
     void StopInternal() override;
@@ -77,7 +77,7 @@ private:
 
     void OnNodeOffline(node::NodeType node_type, uint16_t node_id) override;
 
-    DISALLOW_COPY_AND_ASSIGN(IndexBase);
+    DISALLOW_COPY_AND_ASSIGN(IndexerBase);
 };
 
 }  // namespace log

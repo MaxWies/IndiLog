@@ -1,6 +1,6 @@
 #pragma once
 
-#include "log/indexing_base.h"
+#include "log/indexer_base.h"
 #include "log/log_space.h"
 #include "log/index_shard.h"
 #include "log/aggregating.h"
@@ -16,10 +16,10 @@ struct PerTagMinSeqnum {
 
 typedef tbb::concurrent_hash_map<uint64_t, PerTagMinSeqnum> PerTagMinSeqnumTable;
 
-class IndexNode final : public IndexBase {
+class Indexer final : public IndexerBase {
 public:
-    explicit IndexNode(uint16_t node_id);
-    ~IndexNode();
+    explicit Indexer(uint16_t node_id);
+    ~Indexer();
 
 private:
     std::string log_header_;
@@ -71,7 +71,7 @@ private:
     IndexQuery BuildIndexQuery(const IndexQueryResult& result);
     IndexQueryResult BuildIndexResult(protocol::SharedLogMessage message);
 
-    DISALLOW_COPY_AND_ASSIGN(IndexNode);
+    DISALLOW_COPY_AND_ASSIGN(Indexer);
 };
 
 }  // namespace log

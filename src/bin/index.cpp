@@ -1,7 +1,7 @@
 #include "base/init.h"
 #include "base/common.h"
 #include "utils/env_variables.h"
-#include "log/indexing.h"
+#include "log/indexer.h"
 
 ABSL_FLAG(int, node_id, -1,
           "My node ID. Also settable through environment variable FAAS_NODE_ID.");
@@ -27,7 +27,7 @@ void IndexMain(int argc, char* argv[]) {
     if (node_id == -1) {
         LOG(FATAL) << "Node ID not set!";
     }
-    auto index = std::make_unique<log::IndexNode>(node_id);
+    auto index = std::make_unique<log::Indexer>(node_id);
 
     index->Start();
     server_ptr.store(index.get());
