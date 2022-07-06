@@ -49,9 +49,9 @@ bool FuncProcess::Start(uv_loop_t* uv_loop, utils::BufferPool* read_buffer_pool)
                 LOG(FATAL) << "Failed to read /proc/sys/kernel/hostname";
             }
             hostname = absl::StripSuffix(hostname, "\n");
-            fname_prefix = fmt::format("{}_{}_{}", launcher_->func_name(), hostname, id_);
+            fname_prefix = fmt::format("{}_{}_{}-{}", launcher_->func_name(), hostname, id_, GetRealtimeMicroTimestamp());
         } else {
-            fname_prefix = fmt::format("{}_worker_{}", launcher_->func_name(), id_);
+            fname_prefix = fmt::format("{}_worker_{}-{}", launcher_->func_name(), id_, GetRealtimeMicroTimestamp());
         }
         subprocess_.SetStandardFile(
             uv::Subprocess::kStdout,
