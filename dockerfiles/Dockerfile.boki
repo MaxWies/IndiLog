@@ -1,4 +1,4 @@
-FROM maxwie/boki-deps:latest as builder
+FROM maxwie/boki-deps:thesis-sub as builder
 
 WORKDIR /slog
 RUN rm -rf ./src
