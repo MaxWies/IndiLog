@@ -132,7 +132,6 @@ private:
     protocol::SharedLogMessage BuildReadRequestMessage(LocalOp* op);
     protocol::SharedLogMessage BuildIndexTierReadRequestMessage(LocalOp* op,  uint16_t aggregator_node_id, uint16_t aggregate_type);
     protocol::SharedLogMessage BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint64_t tag, uint64_t log_tail_seqnum);
-    protocol::SharedLogMessage BuildReadRequestMessage(const IndexQueryResult& result);
 
     IndexQuery BuildIndexQuery(LocalOp* op);
     IndexQuery BuildIndexTierQuery(LocalOp* op, uint16_t master_node_id);

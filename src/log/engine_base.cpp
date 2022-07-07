@@ -400,27 +400,6 @@ std::optional<std::string> EngineBase::LogCacheGetAuxData(uint64_t seqnum) {
     return log_cache_.has_value() ? log_cache_->GetAuxData(seqnum) : std::nullopt;
 }
 
-// this is outdated
-bool EngineBase::SendIndexReadRequest(const View::Sequencer* sequencer_node,
-                                      SharedLogMessage* request) {
-    // static constexpr int kMaxRetries = 3;
-
-    // request->sequencer_id = sequencer_node->node_id();
-    // request->view_id = sequencer_node->view()->id();
-    // for (int i = 0; i < kMaxRetries; i++) {
-    //     uint16_t engine_id = sequencer_node->PickIndexEngineNode();
-    //     if (engine_id == node_id_) {
-    //         continue;
-    //     }
-    //     bool success = engine_->SendSharedLogMessage(
-    //         protocol::ConnType::SLOG_ENGINE_TO_ENGINE, engine_id, *request);
-    //     if (success) {
-    //         return true;
-    //     }
-    // }
-    return false;
-}
-
 bool EngineBase::SendIndexTierReadRequest(uint16_t index_node_id, SharedLogMessage* request){
     static constexpr int kMaxRetries = 3;
     for (int i = 0; i < kMaxRetries; i++) {

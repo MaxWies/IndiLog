@@ -1076,6 +1076,7 @@ void Engine::ProcessIndexFoundResult(const IndexQueryResult& query_result) {
 void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
                                         IndexQueryResultVec* more_results) {
     DCHECK(query_result.state == IndexQueryResult::kContinue);
+    DCHECK(indexing_strategy_ == IndexingStrategy::COMPLETE);
     HVLOG_F(1, "Process IndexContinueResult: next_view_id={}",
             query_result.next_view_id);
     const IndexQuery& query = query_result.original_query;
@@ -1099,15 +1100,7 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         locked_index->MakeQuery(query);
         locked_index->PollQueryResults(more_results);
     } else {
-        HVLOG(1) << "Send to remote index";
-        SharedLogMessage request = BuildReadRequestMessage(query_result);
-        bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
-        if (!send_success) {
-            uint32_t logspace_id = bits::JoinTwo16(sequencer_node->view()->id(),
-                                                   sequencer_node->node_id());
-            HLOG_F(ERROR, "Failed to send read index request for logspace {}",
-                   bits::HexStr0x(logspace_id));
-        }
+        UNREACHABLE();
     }
 }
 
@@ -1124,9 +1117,6 @@ void Engine::ProcessIndexQueryResults(const IndexQueryResultVec& results, IndexQ
             break;
         case IndexQueryResult::kEmpty:
             local_index_misses->push_back(result);
-            break;
-        case IndexQueryResult::kContinue:
-            ProcessIndexContinueResult(result, &more_results);
             break;
         case IndexQueryResult::kInvalid:
 #ifdef __FAAS_OP_STAT
@@ -1224,24 +1214,6 @@ SharedLogMessage Engine::BuildIndexTierMinSeqnumRequestMessage(LocalOp* op, uint
     request.prev_view_id = 0;
     request.prev_shard_id = 0;
     request.seqnum_timestamp = seqnum_timestamp;
-    return request;
-}
-
-SharedLogMessage Engine::BuildReadRequestMessage(const IndexQueryResult& result) {
-    DCHECK(result.state == IndexQueryResult::kContinue);
-    IndexQuery query = result.original_query;
-    SharedLogMessage request = SharedLogMessageHelper::NewReadMessage(
-        query.DirectionToOpType());
-    request.origin_node_id = query.origin_node_id;
-    request.hop_times = query.hop_times + 1;
-    request.client_data = query.client_data;
-    request.user_logspace = query.user_logspace;
-    request.query_tag = query.user_tag;
-    request.query_seqnum = query.query_seqnum;
-    request.user_metalog_progress = result.metalog_progress;
-    request.prev_view_id = result.found_result.view_id;
-    request.prev_shard_id = result.found_result.storage_shard_id;
-    request.prev_found_seqnum = result.found_result.seqnum;
     return request;
 }
 
