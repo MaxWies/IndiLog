@@ -1,7 +1,7 @@
 IndiLog
 ==================================
 
-IndiLog is a scalable FaaS runtime for stateful serverless computing with shared logs. It uses distributed indexing to locate records on the shared logs.
+IndiLog is a scalable FaaS runtime for stateful serverless computing with shared logs. It uses distributed indexing to efficiently locate records on the shared logs.
 
 IndiLog extends [Boki](https://github.com/ut-osa/boki). Boki exports the shared log API to serverless functions, allowing them to manage states with strong consistency, durability, and fault tolerance.
 Indilog and Boki use [Nightcore](https://github.com/ut-osa/nightcore) as the runtime for serverless functions.
@@ -34,7 +34,7 @@ IndiLog supports Boki's libraries for transactional workflows and durable object
 
 ### System evaluation ###
 
-A separate repository (TODO) includes scripts and detailed instructions on running evaluation workloads for IndiLog and Boki.
+A separate repository [IndiLog-Benchmarks](https://github.com/MaxWies/indilog-benchmarks) includes scripts and detailed instructions on running evaluation workloads for IndiLog and Boki.
 
 ### Limitations of the current prototype ###
 
