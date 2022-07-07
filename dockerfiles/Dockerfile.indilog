@@ -1,4 +1,4 @@
-FROM maxwie/indilog-deps:latest as builder
+FROM maxwie/indilog-deps:thesis-sub as builder
 
 WORKDIR /slog
 RUN rm -rf ./src

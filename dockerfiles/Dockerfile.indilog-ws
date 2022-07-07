@@ -1,3 +1,0 @@
-FROM maxwie/indilog:latest 
-
-COPY . /src/slog

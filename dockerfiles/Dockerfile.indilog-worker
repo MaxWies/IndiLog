@@ -1,0 +1,3 @@
+FROM maxwie/indilog:thesis-sub 
+
+COPY . /src/slog
