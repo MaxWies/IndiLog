@@ -109,6 +109,8 @@ public:
     void MakeQuery(const IndexQuery& query);
     void PollQueryResults(QueryResultVec* results);
     void Aggregate(size_t* num_link_entries, size_t* num_range_entries, size_t* size);
+    bool Finalize(uint32_t final_metalog_position, 
+                  const std::vector<MetaLogProto>& tail_metalogs);
 
 private:
     uint16_t sequence_number_id_;
@@ -135,6 +137,7 @@ private:
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id, 
                                       uint64_t seqnum, uint16_t storage_shard_id);
     IndexQueryResult BuildMissResult(const IndexQuery& query);
+    IndexQueryResult BuildMissResultForEmptyChain(const IndexQuery& query);
     IndexQueryResult BuildEmptyResult(const IndexQuery& query);
 
 };

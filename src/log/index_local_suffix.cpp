@@ -125,6 +125,21 @@ void SeqnumSuffixChain::Aggregate(size_t* link_entries, size_t* range_entries, s
     }
 }
 
+bool SeqnumSuffixChain::Finalize(uint32_t final_metalog_position,
+                        const std::vector<MetaLogProto>& tail_metalogs) {
+    // pending queries will be forwarded to the index tier
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        const IndexQuery& query = iter->second;
+        pending_query_results_.push_back(IsEmpty() ? 
+            BuildMissResultForEmptyChain(query) : 
+            BuildMissResult(query)
+        );
+        iter = pending_queries_.erase(iter);
+    }
+    return true;
+}
+
 bool SeqnumSuffixChain::IsEmpty(){
     return suffix_chain_.empty();
 }
@@ -321,6 +336,21 @@ IndexQueryResult SeqnumSuffixChain::BuildMissResult(const IndexQuery& query) {
     return IndexQueryResult {
         .state = IndexQueryResult::kMiss,
         .metalog_progress = metalog_progress(),
+        .next_view_id = 0,
+        .original_query = query,
+        .found_result = IndexFoundResult {
+            .view_id = 0,
+            .storage_shard_id = 0,
+            .seqnum = kInvalidLogSeqNum
+        }
+    };
+}
+
+IndexQueryResult SeqnumSuffixChain::BuildMissResultForEmptyChain(const IndexQuery& query) {
+    HLOG(WARNING) << "Chain is empty. Metalog progress is set to progress of query";
+    return IndexQueryResult {
+        .state = IndexQueryResult::kMiss,
+        .metalog_progress = query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,
         .found_result = IndexFoundResult {

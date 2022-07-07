@@ -170,16 +170,24 @@ void Engine::OnViewFinalized(const FinalizedView* finalized_view) {
         );
         switch(indexing_strategy_){
             case IndexingStrategy::DISTRIBUTED:
-                // todo: broken
-                // tag_cache_collection_.ForEachLogSpace(
-                //     [finalized_view, &query_results] (uint32_t logspace_id,
-                //                                     LockablePtr<TagCache> tag_cache_ptr) {
-                //         log_utils::FinalizedLogSpace<TagCache>(
-                //             tag_cache_ptr, finalized_view);
-                //         auto locked_index = tag_cache_ptr.Lock();
-                //         locked_index->PollQueryResults(&query_results);
-                //     }
-                // );
+                suffix_chain_collection_.ForEachLogSpace(
+                    [finalized_view, &query_results] (uint32_t logspace_id,
+                                                    LockablePtr<SeqnumSuffixChain> suffix_chain_ptr) {
+                        log_utils::FinalizedLogSpace<SeqnumSuffixChain>(
+                            suffix_chain_ptr, finalized_view);
+                        auto locked_index = suffix_chain_ptr.Lock();
+                        locked_index->PollQueryResults(&query_results);
+                    }
+                );
+                tag_cache_collection_.ForEachLogSpace(
+                    [finalized_view, &query_results] (uint32_t logspace_id,
+                                                    LockablePtr<TagCache> tag_cache_ptr) {
+                        log_utils::FinalizedLogSpace<TagCache>(
+                            tag_cache_ptr, finalized_view);
+                        auto locked_index = tag_cache_ptr.Lock();
+                        locked_index->PollQueryResults(&query_results);
+                    }
+                );
                 break;
             case IndexingStrategy::COMPLETE:
                 index_complete_collection_.ForEachActiveLogSpace(

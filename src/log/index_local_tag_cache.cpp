@@ -623,6 +623,18 @@ void TagCache::Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size){
     }
 }
 
+bool TagCache::Finalize(uint32_t final_metalog_position,
+                        const std::vector<MetaLogProto>& tail_metalogs) {
+    // pending queries will be forwarded to the index tier
+    auto iter = pending_queries_.begin();
+    while (iter != pending_queries_.end()) {
+        const IndexQuery& query = iter->second;
+        pending_query_results_.push_back(BuildMissResult(query, index_metalog_progress()));
+        iter = pending_queries_.erase(iter);
+    }
+    return true;
+}
+
 bool TagCache::AdvanceIndexProgress(uint16_t view_id){
     bool advanced = false;
     uint32_t end_seqnum_position;
@@ -670,23 +682,6 @@ bool TagCache::AdvanceIndexProgress(uint16_t view_id){
     }
     return advanced;
 }
-
-// void TagCache::OnFinalized(uint32_t metalog_position) {
-//     auto iter = pending_queries_.begin();
-//     while (iter != pending_queries_.end()) {
-//         DCHECK_EQ(iter->first, kMaxMetalogPosition);
-//         const IndexQuery& query = iter->second;
-//         ProcessQuery(query);
-//         iter = pending_queries_.erase(iter);
-//     }
-// }
-
-// bool TagCache::Finalize(uint32_t final_metalog_position,
-//                             const std::vector<MetaLogProto>& tail_metalogs) {
-//                                 return true;
-//                             }
-
-//TODO: on finalized
 
 PerSpaceTagCache* TagCache::GetOrCreatePerSpaceTagCache(uint32_t user_logspace){
     if (per_space_cache_.contains(user_logspace)) {

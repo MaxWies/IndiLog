@@ -119,6 +119,8 @@ public:
     void InstallView(uint16_t view_id, uint32_t metalog_position);
     void Clear();
     void Aggregate(size_t* num_tags, size_t* num_seqnums, size_t* size);
+    bool Finalize(uint32_t final_metalog_position, 
+                  const std::vector<MetaLogProto>& tail_metalogs);
 
     uint32_t identifier(){
         return bits::JoinTwo16(0, sequencer_id_);
@@ -167,7 +169,6 @@ private:
 
     PerSpaceTagCache* GetOrCreatePerSpaceTagCache(uint32_t user_logspace);
 
-    // void OnFinalized(uint32_t metalog_position);
     void Trim(size_t* counter);
     void Evict();
 
