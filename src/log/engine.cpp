@@ -380,12 +380,9 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
     HVLOG(1) << "Send request to index tier";
     std::vector<uint16_t> index_nodes;
     storage_shard->PickIndexNodePerShard(index_nodes);
-    uint16_t master_index_node = storage_shard->PickAggregatorNode(index_nodes);
-    uint16_t aggregate_type = protocol::kUseAggregator;
-    if (storage_shard->UseMasterSlaveMerging()) {
-        aggregate_type = protocol::kUseMasterSlave;
-    }
-    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, master_index_node, aggregate_type);
+    uint16_t aggregator_node = storage_shard->PickAggregatorNode(index_nodes);
+    uint16_t aggregate_type = storage_shard->UseMasterSlaveMerging() ? protocol::kUseMasterSlave : protocol::kUseAggregator;
+    SharedLogMessage request = BuildIndexTierReadRequestMessage(op, aggregator_node, aggregate_type);
     request.sequencer_id = bits::HighHalf32(storage_shard->shard_id());
     request.view_id = view_id;
     bool send_success = true;
@@ -393,7 +390,7 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
         send_success &= SendIndexTierReadRequest(index_node, &request);
     }
     if (!send_success) {
-        HLOG_F(WARNING, "Failed to send index tier request. Master {}", master_index_node);
+        HLOG_F(WARNING, "Failed to send index tier request. Aggregator node={}", aggregator_node);
         onging_reads_.RemoveChecked(op->id);
         FinishLocalOpWithFailure(op, SharedLogResultType::DATA_LOST);
         return;
@@ -404,7 +401,7 @@ void Engine::HandleIndexTierRead(LocalOp* op, uint16_t view_id, const View::Stor
 #ifdef __FAAS_OP_TRACING
     SaveTracePoint(op->id, "SentIndexTierReadRequest");
 #endif
-    HVLOG_F(1, "Sent request to index tier successfully. Master {}", master_index_node);
+    HVLOG_F(1, "Sent request to index tier successfully. Aggregator node={}", aggregator_node);
     return;
 }
 
@@ -451,7 +448,7 @@ void Engine::HandleLocalRead(LocalOp* op) {
         view_id = current_view_->id();
         if (storage_shard != nullptr){
             if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
-                suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id)); //todo: safe for view change?
+                suffix_chain_ptr = suffix_chain_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
                 tag_cache_ptr = tag_cache_collection_.GetLogSpaceChecked(bits::LowHalf32(logspace_id));
             } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
                 index_ptr = index_complete_collection_.GetLogSpaceChecked(logspace_id);
@@ -475,8 +472,8 @@ void Engine::HandleLocalRead(LocalOp* op) {
     if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
         IndexQueryResultVec query_results;
         IndexQueryResultVec local_index_misses;
-        // use seqnum suffix
         if(op->query_tag == kEmptyLogTag){
+            // use seqnum suffix
             if(query.query_seqnum >= suffix_chain_heads_[bits::LowHalf32(logspace_id)]) {
                 {
                     auto locked_suffix_chain = suffix_chain_ptr.Lock();
@@ -484,9 +481,6 @@ void Engine::HandleLocalRead(LocalOp* op) {
                     locked_suffix_chain->PollQueryResults(&query_results);
                 }
                 ProcessIndexQueryResults(query_results, &local_index_misses);
-                if (local_index_misses.size() < 1){
-                    return;
-                }
             }
             // use seqnum cache
             else {
@@ -664,14 +658,6 @@ void Engine::OnRecvNewIndexData(const SharedLogMessage& message,
     IndexQueryResultVec query_results;
     IndexQueryResultVec local_index_misses;
     {
-        // if (!view_mutable_.GetMyStorageShards().contains(message.logspace_id)) {
-        //     uint32_t current_max;
-        //     if(max_index_metalog_position_.contains(message.logspace_id)) {
-        //         current_max = max_index_metalog_position_[message.logspace_id];
-        //     }
-        //     max_index_metalog_position_[message.logspace_id] = std::max(current_max, index_data_proto.meta_headers(index_data_proto.meta_headers_size()-1).metalog_position());
-        //     return;
-        // }
         DCHECK(message.view_id < views_.size());
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
             absl::ReaderMutexLock view_lk(&view_mu_);
@@ -941,13 +927,9 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         DCHECK_EQ(local_start_id, received_message.local_start_id);
         HVLOG_F(1, "Create logspace for view={}, sequencer={}", current_view_->id(), received_message.sequencer_id);
         uint32_t metalog_position = received_message.metalog_position;
-        // uint32_t index_metalog_position = 0;
         if (max_metalog_position_.contains(received_message.logspace_id)){
             metalog_position = std::max(metalog_position, max_metalog_position_.at(received_message.logspace_id));
         }
-        // if (max_index_metalog_position_.contains(received_message.logspace_id)){
-        //     index_metalog_position = max_index_metalog_position_.at(received_message.logspace_id);
-        // }
         HVLOG_F(1, "Init with metalog_position={}", metalog_position);
         producer_collection_.InstallLogSpace(std::make_unique<LogProducer>(received_message.storage_shard_id, current_view_, received_message.sequencer_id, metalog_position, received_message.local_start_id));
         if (indexing_strategy_ == IndexingStrategy::DISTRIBUTED) {
@@ -972,7 +954,7 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
                 auto locked_tag_cache_ptr = tag_cache_ptr.Lock();
                 locked_tag_cache_ptr->InstallView(current_view_->id(), metalog_position);
             }
-            // seq cache is built in constructor and physical log independent
+            // seq cache is built in constructor and independent from metalogs
         } else if (indexing_strategy_ == IndexingStrategy::COMPLETE) {
             index_complete_collection_.InstallLogSpace(std::make_unique<IndexComplete>(current_view_, received_message.sequencer_id));
         }
@@ -991,7 +973,6 @@ void Engine::OnRecvRegistrationResponse(const protocol::SharedLogMessage& receiv
         }
     }
     else {
-        HLOG(ERROR) << "Registration logic unreachable";
         UNREACHABLE();
     }
 }
@@ -1118,7 +1099,6 @@ void Engine::ProcessIndexContinueResult(const IndexQueryResult& query_result,
         locked_index->MakeQuery(query);
         locked_index->PollQueryResults(more_results);
     } else {
-        // TODO: sent to index tier
         HVLOG(1) << "Send to remote index";
         SharedLogMessage request = BuildReadRequestMessage(query_result);
         bool send_success = SendIndexReadRequest(DCHECK_NOTNULL(sequencer_node), &request);
@@ -1171,9 +1151,15 @@ void Engine::ProcessIndexQueryResultsComplete(const IndexQueryResultVec& results
         const IndexQuery& query = result.original_query;
         switch (result.state) {
         case IndexQueryResult::kFound:
+#ifdef __FAAS_OP_STAT
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
             ProcessIndexFoundResult(result);
             break;
         case IndexQueryResult::kEmpty:
+#ifdef __FAAS_OP_STAT
+            local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
+#endif 
             FinishLocalOpWithFailure(onging_reads_.PollChecked(query.client_data),
                 SharedLogResultType::EMPTY, result.metalog_progress);
             break;
@@ -1468,17 +1454,17 @@ void Engine::StatisticsThreadMain() {
             std::ofstream ix_memory_file(fmt::format("/tmp/slog/stats/index-memory-{}-{}.csv", my_node_id(), now_ts));
             ix_memory_file
                 << std::to_string(suffix_chain_size + seqnum_cache_size + tag_cache_size + complete_index_size) << ","
-                << std::to_string(complete_index_size) << "," 
-                << std::to_string(complete_index_num_seqnums) << "," 
-                << std::to_string(complete_index_num_tags) << "," 
-                << std::to_string(suffix_chain_size) << ","
-                << std::to_string(suffix_chain_links) << ","
-                << std::to_string(suffix_chain_num_ranges) << ","
-                << std::to_string(seqnum_cache_size) << ","
-                << std::to_string(seqnum_cache_num_seqnums) << ","
-                << std::to_string(tag_cache_size) << ","
-                << std::to_string(tag_cache_num_tags) << ","
-                << std::to_string(tag_cache_seqnums) << ",";
+                << std::to_string(complete_index_size)          << "," 
+                << std::to_string(complete_index_num_seqnums)   << "," 
+                << std::to_string(complete_index_num_tags)      << "," 
+                << std::to_string(suffix_chain_size)            << ","
+                << std::to_string(suffix_chain_links)           << ","
+                << std::to_string(suffix_chain_num_ranges)      << ","
+                << std::to_string(seqnum_cache_size)            << ","
+                << std::to_string(seqnum_cache_num_seqnums)     << ","
+                << std::to_string(tag_cache_size)               << ","
+                << std::to_string(tag_cache_num_tags)           << ","
+                << std::to_string(tag_cache_seqnums)            << ",";
             ix_memory_file.close();
 #endif
             previous_local_op_id_ = local_op_id;

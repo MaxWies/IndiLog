@@ -141,8 +141,8 @@ constexpr uint64_t kInvalidLogTag     = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogLocalId = std::numeric_limits<uint64_t>::max();
 constexpr uint64_t kInvalidLogSeqNum  = std::numeric_limits<uint64_t>::max();
 
-constexpr uint64_t kUseAggregator     = std::numeric_limits<uint16_t>::max();
-constexpr uint64_t kUseMasterSlave    = std::numeric_limits<uint16_t>::max()-1;
+constexpr uint64_t kUseAggregator     = std::numeric_limits<uint16_t>::max();   // use aggregator node for aggregating
+constexpr uint64_t kUseMasterSlave    = std::numeric_limits<uint16_t>::max()-1; // one of the index nodes is used for aggregating
 
 constexpr uint32_t kFuncWorkerUseEngineSocketFlag = (1 << 0);
 constexpr uint32_t kUseFifoForNestedCallFlag      = (1 << 1);
