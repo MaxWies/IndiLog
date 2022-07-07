@@ -1115,10 +1115,10 @@ void Engine::ProcessIndexQueryResults(const IndexQueryResultVec& results, IndexQ
 #endif 
             ProcessIndexFoundResult(result);
             break;
-        case IndexQueryResult::kEmpty:
+        case IndexQueryResult::kMiss:
             local_index_misses->push_back(result);
             break;
-        case IndexQueryResult::kInvalid:
+        case IndexQueryResult::kEmpty:
 #ifdef __FAAS_OP_STAT
             local_index_hit_counter_.fetch_add(1, std::memory_order_acq_rel);
 #endif

@@ -134,8 +134,8 @@ private:
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id, 
                                       uint64_t seqnum, uint16_t storage_shard_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
-    IndexQueryResult BuildInvalidResult(const IndexQuery& query);
+    IndexQueryResult BuildMissResult(const IndexQuery& query);
+    IndexQueryResult BuildEmptyResult(const IndexQuery& query);
 
 };
 

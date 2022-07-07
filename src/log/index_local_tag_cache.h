@@ -176,8 +176,8 @@ private:
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint64_t metalog_progress, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query, uint64_t metalog_progress);
-    IndexQueryResult BuildInvalidResult(const IndexQuery& query, uint64_t metalog_progress);
+    IndexQueryResult BuildMissResult(const IndexQuery& query, uint64_t metalog_progress);
+    IndexQueryResult BuildEmptyResult(const IndexQuery& query, uint64_t metalog_progress);
 
 };
 

@@ -91,7 +91,7 @@ protected:
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint16_t view_id,
                                       uint64_t seqnum, uint16_t engine_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
+    IndexQueryResult BuildEmptyResult(const IndexQuery& query);
     IndexQueryResult BuildContinueResult(const IndexQuery& query, bool found,
                                          uint64_t seqnum, uint16_t engine_id);
 

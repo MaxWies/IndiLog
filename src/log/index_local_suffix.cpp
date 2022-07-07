@@ -87,7 +87,7 @@ uint64_t SeqnumSuffixChain::ProvideMetaLog(const MetaLogProto& metalog_proto){
 
 void SeqnumSuffixChain::MakeQuery(const IndexQuery& query) {
     if(suffix_chain_.empty()){
-        pending_query_results_.push_back(BuildNotFoundResult(query));
+        pending_query_results_.push_back(BuildMissResult(query));
     }
     uint16_t query_view_id = log_utils::GetViewId(query.metalog_progress);
     if (query_view_id > view_id()){
@@ -173,12 +173,12 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
         else if (query.query_seqnum < seqnum) {
-            HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
-            return BuildNotFoundResult(query);
+            HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Miss";
+            return BuildMissResult(query);
         }
     } else {
-        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
-        return BuildNotFoundResult(query);
+        HVLOG(1) << "SuffixRead: Chain is empty -> Miss";
+        return BuildMissResult(query);
     }
     // check if seqnum lies at tail or after tail in future
     if (GetTail(&seqnum, &storage_shard_id)){
@@ -187,8 +187,8 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
         else if (seqnum < query.query_seqnum) {
-            HVLOG(1) << "SuffixRead: Seqnum lies behind tail -> Invalid";
-            return BuildInvalidResult(query);
+            HVLOG(1) << "SuffixRead: Seqnum lies behind tail -> Empty";
+            return BuildEmptyResult(query);
         }
     }
     // invariant: seqnum lies within suffix head and tail
@@ -206,8 +206,8 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
     }
     if(suffix_seq_lower == nullptr) {
         // all empty
-        HVLOG(1) << "All links empty -> Empty";
-        return BuildNotFoundResult(query);
+        HVLOG(1) << "All links empty -> Miss";
+        return BuildMissResult(query);
     }
     if(suffix_seq_lower->FindNext(query.query_seqnum, &seqnum, &storage_shard_id)){
         HVLOG(1) << "SuffixRead: Next seqnum in lower -> Found";
@@ -230,8 +230,8 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadNext(const IndexQuery& query){
     }
     if(suffix_seq_upper == nullptr) {
         // create invalid result because seqnum lies in the future
-        HVLOG(1) << "SuffixRead: Seqnum in future -> Invalid";
-        return BuildInvalidResult(query);
+        HVLOG(1) << "SuffixRead: Seqnum in future -> Empty";
+        return BuildEmptyResult(query);
     }
     // get first entry from an non-empty upper
     suffix_seq_upper->GetHead(&seqnum, &storage_shard_id);
@@ -251,12 +251,12 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
             return BuildFoundResult(query, view_id(), seqnum, storage_shard_id);
         }
         else if (query.query_seqnum < seqnum) {
-            HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Empty";
-            return BuildNotFoundResult(query);
+            HVLOG(1) << "SuffixRead: Seqnum lies before head with gap -> Miss";
+            return BuildMissResult(query);
         }
     } else {
-        HVLOG(1) << "SuffixRead: Chain is empty -> Empty";
-        return BuildNotFoundResult(query);
+        HVLOG(1) << "SuffixRead: Chain is empty -> Miss";
+        return BuildMissResult(query);
     }
     // check if seqnum lies after tail
     if (GetTail(&seqnum, &storage_shard_id)){
@@ -284,8 +284,8 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
     }
     if(suffix_link_upper == nullptr) {
         // all empty
-        HVLOG(1) << "All links empty -> Empty";
-        return BuildNotFoundResult(query);
+        HVLOG(1) << "All links empty -> Miss";
+        return BuildMissResult(query);
     }
     if(suffix_link_upper->FindPrev(query.query_seqnum, &seqnum, &storage_shard_id)){
         HVLOG(1) << "SuffixRead: Prev seqnum in upper -> Found";
@@ -297,9 +297,9 @@ IndexQueryResult SeqnumSuffixChain::ProcessReadPrev(const IndexQuery& query){
         );
     }
     // lower not necessary because trimmed and contigous
-    HVLOG(1) << "SuffixRead: Not in upper and lower is trimmed -> Empty";
+    HVLOG(1) << "SuffixRead: Not in upper and lower is trimmed -> Miss";
     DCHECK_EQ(suffix_link_upper->view_id(), suffix_chain_.begin()->first);
-    return BuildNotFoundResult(query);
+    return BuildMissResult(query);
 }
 
 IndexQueryResult SeqnumSuffixChain::BuildFoundResult(const IndexQuery& query, uint16_t view_id,
@@ -317,9 +317,9 @@ IndexQueryResult SeqnumSuffixChain::BuildFoundResult(const IndexQuery& query, ui
     };
 }
 
-IndexQueryResult SeqnumSuffixChain::BuildNotFoundResult(const IndexQuery& query) {
+IndexQueryResult SeqnumSuffixChain::BuildMissResult(const IndexQuery& query) {
     return IndexQueryResult {
-        .state = IndexQueryResult::kEmpty,
+        .state = IndexQueryResult::kMiss,
         .metalog_progress = metalog_progress(),
         .next_view_id = 0,
         .original_query = query,
@@ -331,9 +331,9 @@ IndexQueryResult SeqnumSuffixChain::BuildNotFoundResult(const IndexQuery& query)
     };
 }
 
-IndexQueryResult SeqnumSuffixChain::BuildInvalidResult(const IndexQuery& query) {
+IndexQueryResult SeqnumSuffixChain::BuildEmptyResult(const IndexQuery& query) {
     return IndexQueryResult {
-        .state = IndexQueryResult::kInvalid,
+        .state = IndexQueryResult::kEmpty,
         .metalog_progress = metalog_progress(),
         .next_view_id = 0,
         .original_query = query,

@@ -405,8 +405,8 @@ void Indexer::ProcessIndexQueryResults(const IndexQueryResultVec& results) {
     IndexQueryResultVec more_results;
     for (const IndexQueryResult& result : results) {
         switch (result.state) {
-        case IndexQueryResult::kEmpty:
         case IndexQueryResult::kFound:
+        case IndexQueryResult::kEmpty:
             ProcessIndexResult(result);
             break;
         case IndexQueryResult::kContinue:

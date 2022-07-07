@@ -248,8 +248,8 @@ void Index::ProcessReadNext(const IndexQuery& query) {
             bits::HexStr0x(query.query_seqnum), query.user_logspace, query.user_tag);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id > view_->id()) {
-        pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG(1) << "IndexRead: ProcessReadNext: NotFoundResult";
+        pending_query_results_.push_back(BuildEmptyResult(query));
+        HVLOG(1) << "IndexRead: ProcessReadNext: EmptyResult";
         return;
     }
     uint64_t seqnum;
@@ -268,8 +268,8 @@ void Index::ProcessReadNext(const IndexQuery& query) {
                                      found_result.seqnum, found_result.storage_shard_id));
                 HVLOG_F(1, "IndexRead: ProcessReadNext: FoundResult (from prev_result): query_seqnum={}, seqnum={}", bits::HexStr0x(query.query_seqnum), bits::HexStr0x(found_result.seqnum));
             } else {
-                pending_query_results_.push_back(BuildNotFoundResult(query));
-                HVLOG(1) << "IndexRead: ProcessReadNext: NotFoundResult";
+                pending_query_results_.push_back(BuildEmptyResult(query));
+                HVLOG(1) << "IndexRead: ProcessReadNext: EmptyResult";
             }
         }
     } else {
@@ -300,8 +300,8 @@ void Index::ProcessReadPrev(const IndexQuery& query) {
         pending_query_results_.push_back(BuildContinueResult(query, false, 0, 0));
         HVLOG(1) << "IndexRead: ProcessReadPrev: ContinueResult";
     } else {
-        pending_query_results_.push_back(BuildNotFoundResult(query));
-        HVLOG(1) << "IndexRead: ProcessReadPrev: NotFoundResult";
+        pending_query_results_.push_back(BuildEmptyResult(query));
+        HVLOG(1) << "IndexRead: ProcessReadPrev: EmptyResult";
     }
 }
 
@@ -309,7 +309,7 @@ bool Index::ProcessBlockingQuery(const IndexQuery& query) {
     DCHECK(query.direction == IndexQuery::kReadNextB && query.initial);
     uint16_t query_view_id = log_utils::GetViewId(query.query_seqnum);
     if (query_view_id > view_->id()) {
-        pending_query_results_.push_back(BuildNotFoundResult(query));
+        pending_query_results_.push_back(BuildEmptyResult(query));
         return true;
     }
     uint64_t seqnum;
@@ -363,7 +363,7 @@ IndexQueryResult Index::BuildFoundResult(const IndexQuery& query, uint16_t view_
     };
 }
 
-IndexQueryResult Index::BuildNotFoundResult(const IndexQuery& query) {
+IndexQueryResult Index::BuildEmptyResult(const IndexQuery& query) {
     return IndexQueryResult {
         .state = IndexQueryResult::kEmpty,
         .metalog_progress = query.initial ? index_metalog_progress()

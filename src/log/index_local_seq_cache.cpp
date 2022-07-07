@@ -58,7 +58,7 @@ IndexQueryResult SeqnumCache::MakeQuery(const IndexQuery& query){
         return BuildFoundResult(query, query.query_seqnum, storage_shard_id);
     } else {
         HVLOG_F(1, "seqnum={} not in cache", bits::HexStr0x(query.query_seqnum));
-        return BuildNotFoundResult(query);
+        return BuildMissResult(query);
     }
 }
 
@@ -77,9 +77,9 @@ IndexQueryResult SeqnumCache::BuildFoundResult(const IndexQuery& query, uint64_t
     };
 
 }
-IndexQueryResult SeqnumCache::BuildNotFoundResult(const IndexQuery& query){
+IndexQueryResult SeqnumCache::BuildMissResult(const IndexQuery& query){
    return IndexQueryResult {
-        .state = IndexQueryResult::kEmpty,
+        .state = IndexQueryResult::kMiss,
         .metalog_progress = query.metalog_progress,
         .next_view_id = 0,
         .original_query = query,

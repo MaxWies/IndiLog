@@ -66,7 +66,7 @@ bool IndexShard::AdvanceIndexProgress(const IndexDataProto& index_data) {
                             < absl::ToInt64Microseconds(kBlockingQueryTimeout)) {
                         unfinished.push_back(std::make_pair(start_timestamp, query));
                     } else {
-                        pending_query_results_.push_back(BuildNotFoundResult(query));
+                        pending_query_results_.push_back(BuildEmptyResult(query));
                     }
                 }
             }

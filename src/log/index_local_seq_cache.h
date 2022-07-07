@@ -24,7 +24,7 @@ private:
     std::string log_header_;
 
     IndexQueryResult BuildFoundResult(const IndexQuery& query, uint64_t seqnum, uint16_t storage_shard_id);
-    IndexQueryResult BuildNotFoundResult(const IndexQuery& query);
+    IndexQueryResult BuildMissResult(const IndexQuery& query);
 
     DISALLOW_COPY_AND_ASSIGN(SeqnumCache);
 };
