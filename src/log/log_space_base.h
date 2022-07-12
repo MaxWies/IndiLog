@@ -76,7 +76,6 @@ private:
     std::map</* metalog_seqnum */ uint32_t, MetaLogProto*> pending_metalogs_;
 
     void AdvanceMetaLogProgress();
-    bool CanApplyMetaLog(const MetaLogProto& meta_log);
     void ConsiderStorageShardChange(const MetaLogProto& meta_log);
     void ApplyMetaLog(const MetaLogProto& meta_log);
 

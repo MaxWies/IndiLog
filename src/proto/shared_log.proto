@@ -75,8 +75,9 @@ message MetaLogProto {
 
     message NewLogsProto {
         uint32          start_seqnum = 1;
-        repeated uint32 shard_starts = 2;
-        repeated uint32 shard_deltas = 3;
+        repeated uint32 shard_ids    = 2;
+        repeated uint32 shard_starts = 3;
+        repeated uint32 shard_deltas = 4;
     }
     NewLogsProto new_logs_proto = 4;
 
@@ -86,9 +87,6 @@ message MetaLogProto {
         uint64 trim_seqnum   = 3;
     }
     TrimProto trim_proto = 5;
-
-    uint32 num_productive_storage_shards_ids = 6;
-    repeated uint32 active_storage_shard_ids = 7;
 }
 
 message MetaLogsProto {
@@ -141,14 +139,6 @@ message IndexDataProto {
 message IndexDataPackagesProto {
     uint32 logspace_id  = 1;
     repeated IndexDataProto index_data_proto = 2;
-}
-
-message IndexResultProto {
-    uint32 original_requester_id = 1;
-    bool found = 2;
-    uint32 view_id = 3;
-    uint32 storage_shard_id = 4;
-    uint64 seqnum = 5;
 }
 
 message IndexOpProto {

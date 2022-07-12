@@ -107,7 +107,7 @@ void LogSpaceBase::SerializeToProto(MetaLogsProto* meta_logs_proto) {
 }
 
 void LogSpaceBase::AdvanceMetaLogProgress() {
-    //pending metalogs is always sorted
+    //pending metalogs are always sorted
     auto iter = pending_metalogs_.begin();
     while (iter != pending_metalogs_.end()) {
         if (iter->first < metalog_position_) {
@@ -115,7 +115,7 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
             continue;
         }
         MetaLogProto* meta_log = iter->second;
-        if (!CanApplyMetaLog(*meta_log)){
+        if (meta_log->metalog_seqnum() != metalog_position_){
             break;
         }
         ApplyMetaLog(*meta_log);
@@ -138,39 +138,6 @@ void LogSpaceBase::AdvanceMetaLogProgress() {
     }
 }
 
-bool LogSpaceBase::CanApplyMetaLog(const MetaLogProto& meta_log) {
-    switch (mode_) {
-    case kLogProducer:
-        switch (meta_log.type()) {
-        case MetaLogProto::NEW_LOGS:
-            for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
-                uint32_t storage_shard = meta_log.active_storage_shard_ids().at(i);
-                uint16_t local_storage_shard = gsl::narrow_cast<uint16_t>(storage_shard);
-                if (interested_shards_.contains(local_storage_shard)){
-                    uint32_t shard_start = meta_log.new_logs_proto().shard_starts(
-                        static_cast<int>(i));
-                    DCHECK_GE(shard_start, shard_progresses_[local_storage_shard]);
-                    if (shard_start > shard_progresses_[local_storage_shard]) {
-                        HVLOG_F(1, "Cannot apply metalog. shard_start={} higher than shard_progress={}", shard_start, shard_progresses_[local_storage_shard]);
-                        return false;
-                    }
-                }
-            }
-            return true;
-        default:
-            break;
-        }
-        break;
-    case kLogStorage:
-    case kFullMode:
-    case kLogSuffix:
-        return meta_log.metalog_seqnum() == metalog_position_;
-    default:
-        break;
-    }
-    UNREACHABLE();
-}
-
 void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
     switch (meta_log.type()) {
     case MetaLogProto::NEW_LOGS:
@@ -183,8 +150,8 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                     HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                             meta_log.metalog_seqnum(), start_seqnum);
                     std::vector<std::pair<uint16_t, uint32_t>> productive_cuts_;
-                    for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
-                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.active_storage_shard_ids(i));
+                    for (int i = 0; i < new_logs.shard_ids_size(); i++) {
+                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(new_logs.shard_ids(i));
                         uint32_t shard_start = new_logs.shard_starts(static_cast<int>(i));
                         uint32_t delta = new_logs.shard_deltas(static_cast<int>(i));
                         shard_progresses_[storage_shard_id] = shard_start + delta;
@@ -204,8 +171,8 @@ void LogSpaceBase::ApplyMetaLog(const MetaLogProto& meta_log) {
                     uint32_t start_seqnum = new_logs.start_seqnum();
                     HVLOG_F(1, "MetalogUpdate: Apply NEW_LOGS meta log: metalog_seqnum={}, start_seqnum={}",
                             meta_log.metalog_seqnum(), start_seqnum);
-                    for (int i = 0; i < meta_log.active_storage_shard_ids_size(); i++) {
-                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(meta_log.active_storage_shard_ids(i));
+                    for (int i = 0; i < new_logs.shard_ids_size(); i++) {
+                        uint16_t storage_shard_id = gsl::narrow_cast<uint16_t>(new_logs.shard_ids(i));
                         uint32_t shard_start = new_logs.shard_starts(i);
                         uint32_t delta = new_logs.shard_deltas(i);
                         uint64_t start_localid = bits::JoinTwo32(storage_shard_id, shard_start);

@@ -127,20 +127,16 @@ std::optional<MetaLogProto> MetaLogPrimary::MarkNextCut() {
     auto* new_logs_proto = meta_log_proto.mutable_new_logs_proto();
     new_logs_proto->set_start_seqnum(bits::LowHalf64(seqnum_position()));
     uint32_t total_delta = 0;
-    for (uint16_t shard_id : unblocked_shards_) {
-        meta_log_proto.add_active_storage_shard_ids(shard_id);
+    for (uint16_t shard_id : dirty_shards_) {
+        new_logs_proto->add_shard_ids(shard_id);
         new_logs_proto->add_shard_starts(last_cut_.at(shard_id));
-        uint32_t delta = 0;
-        if (dirty_shards_.contains(shard_id)) {
-            uint32_t current_position = GetShardReplicatedPosition(shard_id);
-            DCHECK_GT(current_position, last_cut_.at(shard_id));
-            delta = current_position - last_cut_.at(shard_id);
-            last_cut_[shard_id] = current_position;
-        }
+        uint32_t current_position = GetShardReplicatedPosition(shard_id);
+        DCHECK_GT(current_position, last_cut_.at(shard_id));
+        uint32_t delta = current_position - last_cut_.at(shard_id);
+        last_cut_[shard_id] = current_position;
         new_logs_proto->add_shard_deltas(delta);
         total_delta += delta;
     }
-    meta_log_proto.set_num_productive_storage_shards_ids(gsl::narrow_cast<uint32_t>(dirty_shards_.size()));
     blocking_change_ = false;
     dirty_shards_.clear();
     HVLOG_F(1, "Generate new NEW_LOGS meta log: start_seqnum={}, total_delta={}",
@@ -417,13 +413,21 @@ void LogStorage::OnNewLogs(uint32_t metalog_seqnum,
 }
 
 void LogStorage::OnMetaLogApplied(const MetaLogProto& meta_log_proto){
-    if (0 < index_data_.seqnum_halves_size()) {
-        index_data_.set_metalog_position(metalog_position());
-        index_data_.set_end_seqnum_position(local_seqnum_position());
-        index_data_.set_num_productive_storage_shards(meta_log_proto.num_productive_storage_shards_ids());
-        IndexDataProto* data = index_data_packages_.add_index_data_proto();
-        data->Swap(&index_data_);
-        index_data_.Clear();
+    switch (meta_log_proto.type()) {
+    case MetaLogProto::NEW_LOGS:
+        {
+            if (0 < index_data_.seqnum_halves_size()) {
+                index_data_.set_metalog_position(metalog_position());
+                index_data_.set_end_seqnum_position(local_seqnum_position());
+                index_data_.set_num_productive_storage_shards(gsl::narrow_cast<uint32_t>(meta_log_proto.new_logs_proto().shard_ids_size()));
+                IndexDataProto* data = index_data_packages_.add_index_data_proto();
+                data->Swap(&index_data_);
+                index_data_.Clear();
+            }
+            break;
+        }
+    default:
+        break;
     }
 }
 
