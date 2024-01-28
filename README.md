@@ -1,21 +1,21 @@
-IndiLog
+Ixe
 ==================================
 
-IndiLog is a scalable FaaS runtime for stateful serverless computing with shared logs. It uses distributed indexing to efficiently locate records on the shared logs.
+Ixe is a scalable FaaS runtime for stateful serverless computing with shared logs. It uses distributed indexing to efficiently locate records on the shared logs.
 
-IndiLog extends [Boki](https://github.com/ut-osa/boki). Boki exports the shared log API to serverless functions, allowing them to manage states with strong consistency, durability, and fault tolerance.
-Indilog and Boki use [Nightcore](https://github.com/ut-osa/nightcore) as the runtime for serverless functions.
+Ixe extends [Boki](https://github.com/ut-osa/boki). Boki exports the shared log API to serverless functions, allowing them to manage states with strong consistency, durability, and fault tolerance.
+Ixe and Boki use [Nightcore](https://github.com/ut-osa/nightcore) as the runtime for serverless functions.
 
-IndiLog's name originates from one of its main design characteristics: **di**stributed **in**dexing
+Ixe's name originates as infix anagram from one of its main design characteristics: distributed ind**exi**ng
 
-### Building IndiLog ###
+### Building Ixe ###
 
-Under Ubuntu 20.04, building IndiLog needs following dependencies installed:
+Under Ubuntu 20.04, building Ixe needs following dependencies installed:
 ~~~
 sudo apt install g++ make cmake pkg-config autoconf automake libtool curl unzip
 ~~~
 
-Once installed, build IndiLog with:
+Once installed, build Ixe with:
 
 ~~~
 ./build_deps.sh
@@ -24,17 +24,17 @@ make -j $(nproc)
 
 ### Kernel requirements ###
 
-IndiLog uses like Boki [io_uring](https://en.wikipedia.org/wiki/Io_uring) for asynchronous I/Os.
+Ixe uses like Boki [io_uring](https://en.wikipedia.org/wiki/Io_uring) for asynchronous I/Os.
 
-IndiLog requires Linux kernel 5.10 or later to run.
+Ixe requires Linux kernel 5.10 or later to run.
 
-### IndiLog support libraries ###
+### Ixe support libraries ###
 
-IndiLog supports Boki's libraries for transactional workflows and durable object storage.
+Ixe supports Boki's libraries for transactional workflows and durable object storage.
 
 ### System evaluation ###
 
-A separate repository [IndiLog-Benchmarks](https://github.com/MaxWies/indilog-benchmarks) includes scripts and detailed instructions on running evaluation workloads for IndiLog and Boki.
+A separate repository [Ixe-Benchmarks](https://github.com/MaxWies/ixe-benchmarks) includes scripts and detailed instructions on running evaluation workloads for Ixe and Boki.
 
 ### Limitations of the current prototype ###
 
